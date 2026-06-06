@@ -86,7 +86,8 @@ python main.py
 
 
 
-通过 MuJoCo 3D 渲染全流程闭环验证：输入源 → IK → EMA → 插值器 → tendon_to_config → FK，与实物控制管线一致。```bash
+通过 MuJoCo 3D 渲染全流程闭环验证：输入源 → IK → EMA → 插值器 → tendon_to_config → FK，与实物控制管线一致。
+```bash
 python tests/test_mujoco.py
 ```
 
