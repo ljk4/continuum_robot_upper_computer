@@ -1,17 +1,21 @@
 """
-test_comm.py -- 串口通信逐帧测试脚本
+tests/test_comm.py -- 串口通信逐帧测试脚本
 
 手动发送单帧，等待回复，排查通信链路。
-不用协议库，直接构造原始字节，方便对照。
-
 使用方法：
     conda activate continuum_robot
-    python test_comm.py
+    python tests/test_comm.py
 """
+
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import struct
 import time
 import serial
+
+from config import serial_cfg
 
 
 def crc16_modbus(data: bytes) -> int:
@@ -41,21 +45,14 @@ def build_frame(cmd: int, data: bytes = None) -> bytes:
 
 
 def hex_dump(data: bytes) -> str:
-    """字节序列转 HEX 字符串"""
     return ' '.join(f'{b:02X}' for b in data)
 
 
-# =====================================================
-# 配置（根据实际情况修改）
-# =====================================================
+# 从配置读取
+PORT = serial_cfg.port_sim
+BAUD = serial_cfg.baudrate
+TIMEOUT = 2.0
 
-PORT = "COM5"
-BAUD = 115200
-TIMEOUT = 2.0   # 等待回复超时 (秒)
-
-# =====================================================
-# 主测试流程
-# =====================================================
 
 def main():
     print("=" * 60)
@@ -63,7 +60,6 @@ def main():
     print(f"端口: {PORT}  波特率: {BAUD}")
     print("=" * 60)
 
-    # ---- 1. 打开串口 ----
     try:
         ser = serial.Serial(
             port=PORT, baudrate=BAUD, timeout=0.1,
@@ -76,7 +72,7 @@ def main():
         print(f"\n[错误] 打开串口失败: {e}")
         return
 
-    # ---- 2. 等待 STM32 就绪（监听反馈帧） ----
+    # 等待 STM32 就绪
     print("\n等待 STM32 就绪...")
     ready = False
     t_wait = time.time()
@@ -86,7 +82,6 @@ def main():
         data = ser.read(ser.in_waiting or 1)
         if data:
             buf.extend(data)
-            # 搜索反馈帧头 0xAA55
             idx = buf.find(b'\xAA\x55')
             if idx >= 0 and len(buf) >= idx + 39:
                 frame = bytes(buf[idx:idx + 39])
@@ -101,7 +96,7 @@ def main():
         ser.close()
         return
 
-    # ---- 3. 发送 CMD_QUERY 帧 ----
+    # 测试 CMD_QUERY
     print("\n" + "-" * 60)
     print("测试 1: 发送 CMD_QUERY (0x03)")
     print("-" * 60)
@@ -112,7 +107,6 @@ def main():
     ser.write(frame)
     t_send = time.time()
 
-    # 等待回复
     reply = bytearray()
     while time.time() - t_send < TIMEOUT:
         data = ser.read(ser.in_waiting or 1)
@@ -124,27 +118,24 @@ def main():
 
     if reply:
         print(f"收到 ({len(reply)} 字节): {hex_dump(reply)}")
-
         if len(reply) >= 39 and reply[0] == 0xAA and reply[1] == 0x55:
             cmd = reply[2]
             recv_crc = reply[35] | (reply[36] << 8)
             calc_crc = crc16_modbus(bytes(reply[:35]))
-
             print(f"命令字: 0x{cmd:02X}  (期望 0xA1 反馈或 0x81 ACK)")
             print(f"CRC: 收到=0x{recv_crc:04X}  计算=0x{calc_crc:04X}  "
                   f"{'匹配' if recv_crc == calc_crc else '不匹配!'}")
-
             if cmd == 0xA1:
                 values = struct.unpack('<8f', bytes(reply[3:35]))
                 print(f"编码器值: {[f'{v:+.4f}' for v in values]}")
             elif cmd == 0x81:
                 print("ACK 确认帧")
         else:
-            print(f"[警告] 帧头不匹配，前 2 字节: {hex_dump(reply[:2])}")
+            print(f"[警告] 帧头不匹配")
     else:
         print("[超时] 未收到任何回复")
 
-    # ---- 4. 发送 CMD_TARGET 帧（目标全零） ----
+    # 测试 CMD_TARGET
     print("\n" + "-" * 60)
     print("测试 2: 发送 CMD_TARGET (0x01)，目标全零")
     print("-" * 60)
@@ -167,32 +158,28 @@ def main():
 
     if reply:
         print(f"收到 ({len(reply)} 字节): {hex_dump(reply)}")
-
         if len(reply) >= 39 and reply[0] == 0xAA and reply[1] == 0x55:
             cmd = reply[2]
             recv_crc = reply[35] | (reply[36] << 8)
             calc_crc = crc16_modbus(bytes(reply[:35]))
-
             print(f"命令字: 0x{cmd:02X}")
             print(f"CRC: 收到=0x{recv_crc:04X}  计算=0x{calc_crc:04X}  "
                   f"{'匹配' if recv_crc == calc_crc else '不匹配!'}")
-
             if cmd == 0x81:
                 print("ACK 确认帧 - 通信正常!")
             elif cmd == 0xA1:
                 values = struct.unpack('<8f', bytes(reply[3:35]))
                 print(f"编码器值: {[f'{v:+.4f}' for v in values]}")
         else:
-            print(f"[警告] 帧头不匹配，前 2 字节: {hex_dump(reply[:2])}")
+            print(f"[警告] 帧头不匹配")
     else:
         print("[超时] 未收到任何回复")
 
-    # ---- 5. 持续监听 3 秒（诊断模式） ----
+    # 持续监听 3 秒
     print("\n" + "-" * 60)
     print("测试 3: 监听 3 秒（STM32 应以 20Hz 发送反馈帧）")
     print("-" * 60)
 
-    # 诊断：先读 0.5 秒原始数据看看有没有字节进来
     print("诊断: 读取 0.5 秒原始数据...")
     diag_buf = bytearray()
     t_diag = time.time()
@@ -208,7 +195,6 @@ def main():
     else:
         print("诊断: 未收到任何数据! 串口可能已断开")
 
-    # 正式监听
     t_start = time.time()
     fb_count = 0
     ack_count = 0
@@ -246,7 +232,6 @@ def main():
     else:
         print("[异常] 未收到反馈帧")
 
-    # ---- 6. 关闭 ----
     ser.close()
     print(f"\n[OK] 串口已关闭")
 

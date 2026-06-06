@@ -56,7 +56,12 @@ class RobotConfig:
     ik_damping: float = 1e-3            # 阻尼最小二乘法的阻尼系数 lambda
     ik_max_iter: int = 50               # IK 最大迭代次数
     ik_tolerance: float = 1e-4          # IK 收敛容差 (m)，0.1mm 精度
-    jacobian_step: float = 1e-6         # 数值雅可比矩阵的有限差分步长 (rad)
+    ik_convergence_tol: float = 1e-3   # IK 结果验收容差 (m)，超过此值拒绝下发
+    jacobian_step: float = 1e-5         # 数值雅可比矩阵的有限差分步长 (rad)
+
+    # --- 弯曲角安全限制 ---
+    section1_theta_max_deg: float = 45.0    # 第一部分单节最大弯曲角 (度)
+    section2_theta_max_deg: float = 45.0    # 第二部分单节最大弯曲角 (度)
 
     # --- 驱动器参数 ---
     spool_diameter: float = 0.01        # 绳盘直径 (m)，绳缠绕在舵机轴上的圆盘直径
@@ -119,6 +124,79 @@ class VisionConfig:
 
 
 # =====================================================
+# 安全配置
+# =====================================================
+
+@dataclass
+class SafetyConfig:
+    # --- 障碍物检测 ---
+    obstacle_awareness: bool = False        # 是否启用障碍物检测（集成到 IK 求解中）
+    obstacle_zones: list = field(default_factory=lambda: [
+        # 每个区域: {"center": [x,y,z], "radius": r}
+        # 占位符，后续替换为真实障碍物地图
+        {"center": [0.0, 0.0, 0.5], "radius": 0.05}
+    ])
+
+    # --- 目标位置变化限制 ---
+    max_position_change: float = 0.02       # 单步最大位置变化量 (m)
+
+    # --- 绳长变化阈值 ---
+    max_cable_delta: float = 0.05           # 单步最大绳长变化 (圈)
+
+    # --- IK 惩罚函数权重 ---
+    obstacle_penalty_weight: float = 0.01   # 障碍物排斥势场权重
+    theta_penalty_weight: float = 0.01      # 弯曲角惩罚权重
+    cable_penalty_weight: float = 0.01      # 绳长惩罚权重
+    theta_soft_ratio: float = 0.8           # 弯曲角软边界比例 (80% 处开始惩罚)
+    cable_soft_max: float = 5.0             # 绳长软限制 (圈)，超过此值惩罚
+    obstacle_margin: float = 1.5            # 障碍物安全裕度系数 (d_safe = radius * margin)
+
+
+# =====================================================
+# 输入配置
+# =====================================================
+
+@dataclass
+class InputConfig:
+    # --- 输入模式 ---
+    input_mode: str = "manual"              
+    # "vision" | "manual" | "trajectory"
+
+    # --- 手动模式子类型 ---
+    manual_submode: str = "curvature"       
+    # "end_effector" | "rotations" | "cable_length" | "curvature"
+
+    # 末端模式
+    manual_end_effector: tuple = (0.10, 0.05, 1.10)  # [x, y, z] (m) — 远离 Z 轴可达点
+
+    # 圈数模式
+    manual_rotations: tuple = (0.0,) * 8    # 8 个舵机目标圈数
+
+    # 绳长模式
+    manual_cable_length: tuple = (0.0,) * 8 # 8 绳位移 (m)
+
+    # 常曲率模式
+    manual_curvature: tuple = (20.0, 0.0, 20.0, 180.0)  # [θ1, φ1, θ2, φ2] (度)
+
+    # --- 轨迹模式参数 ---
+    trajectory_type: str = "sine"           # "sine" | "circle" | "line"
+    trajectory_amplitude: float = 0.05      # 轨迹幅度 (m)
+    trajectory_frequency: float = 0.5       # 轨迹频率 (Hz)
+    trajectory_center: tuple = (0.0, 0.0, 0.5)  # 轨迹中心 [x, y, z] (m)
+    trajectory_axis: str = "x"              # 轨迹运动轴 ("x" | "y" | "z" | "xy")
+
+
+# =====================================================
+# 可视化配置
+# =====================================================
+
+@dataclass
+class VisConfig:
+    enable_opencv_vis: bool = True           # 是否启动 OpenCV 可视化线程
+    enable_mujoco_vis: bool = True          # 是否启动 MuJoCo 可视化线程
+
+
+# =====================================================
 # 控制配置
 # =====================================================
 
@@ -132,6 +210,10 @@ class ControlConfig:
     slow_loop_warn_sec: float = 0.025   # 主循环耗时超过此值时发出警告 (s)
     ack_timeout_sec: float = 0.2        # ACK 超时阈值，超过此时间未收到 ACK 则报警 (s)
 
+    # --- 线程降频因子 ---
+    vision_update_div: int = 5           # 视觉/IK 更新频率 = 主循环 / N (默认 50/5=10Hz)
+    mujoco_update_div: int = 3           # MuJoCo 更新频率 = 主循环 / M (默认 50/3≈17Hz)
+
 # =====================================================
 # 模块级单例
 # =====================================================
@@ -140,4 +222,7 @@ serial_cfg = SerialConfig()
 protocol_cfg = ProtocolConfig()
 robot_cfg = RobotConfig()
 vision_cfg = VisionConfig()
+safety_cfg = SafetyConfig()
+input_cfg = InputConfig()
+vis_cfg = VisConfig()
 control_cfg = ControlConfig()

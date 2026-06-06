@@ -1,24 +1,25 @@
-# test_pipeline.py
+# tests/test_pipeline.py
 # 不接入视觉，用随机正运动学结果测试 IK -> 协议打包 -> 发送 -> 接收 全流程
 
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import time
-import struct
 import numpy as np
 
-from ik_solver import MultiSectionRobot, inverse_kinematics
-from protocol import pack_target, parse_frame, crc16_modbus
+from robot.kinematics import MultiSectionRobot, inverse_kinematics
+from comm.protocol import pack_target, parse_frame, crc16_modbus
 
 
 def test_ik_only():
     """纯 IK 测试：随机配置 -> FK -> IK -> FK 验证"""
-
     print("=" * 60)
     print("测试 1: IK 往返验证 (FK -> IK -> FK)")
     print("=" * 60)
 
     robot = MultiSectionRobot()
 
-    # 随机生成配置（角度范围：theta 5~45deg, phi 0~360deg）
     q_true = np.array([
         np.deg2rad(np.random.uniform(5, 45)),
         np.deg2rad(np.random.uniform(0, 360)),
@@ -32,12 +33,10 @@ def test_ik_only():
     print(f"  theta2={np.rad2deg(q_true[2]):.2f}°  "
           f"phi2={np.rad2deg(q_true[3]):.2f}°")
 
-    # FK
     target = robot.tip_position(q_true)
     print(f"\n目标位置 (m):")
     print(f"  x={target[0]:.6f}  y={target[1]:.6f}  z={target[2]:.6f}")
 
-    # IK
     t0 = time.perf_counter()
     q_est = robot.inverse_kinematics(target)
     ik_time = (time.perf_counter() - t0) * 1000
@@ -48,7 +47,6 @@ def test_ik_only():
     print(f"  theta2={np.rad2deg(q_est[2]):.2f}°  "
           f"phi2={np.rad2deg(q_est[3]):.2f}°")
 
-    # FK 验证
     verify = robot.tip_position(q_est)
     error = np.linalg.norm(target - verify)
 
@@ -66,14 +64,12 @@ def test_ik_only():
 
 def test_rotation_output():
     """测试舵机圈数输出"""
-
     print("\n" + "=" * 60)
     print("测试 2: 舵机圈数计算")
     print("=" * 60)
 
     robot = MultiSectionRobot()
 
-    # 随机目标位置（在机器人可达空间内）
     q_rand = np.array([
         np.deg2rad(np.random.uniform(5, 30)),
         np.deg2rad(np.random.uniform(0, 360)),
@@ -84,8 +80,8 @@ def test_rotation_output():
     target = robot.tip_position(q_rand)
     print(f"\n目标位置: [{target[0]:.4f}, {target[1]:.4f}, {target[2]:.4f}]")
 
-    # 通过 inverse_kinematics 接口获取圈数
-    rotations = inverse_kinematics(target.tolist())
+    # inverse_kinematics 返回 (rotations, q)
+    rotations, q = inverse_kinematics(target.tolist())
 
     print(f"\n8 根舵机目标圈数:")
     for i, rot in enumerate(rotations):
@@ -94,14 +90,12 @@ def test_rotation_output():
             print()
 
     print(f"\n  最大 |圈数| = {max(abs(r) for r in rotations):.4f} 圈")
-
     print("\n[通过] 舵机圈数计算完成")
     return True
 
 
 def test_protocol():
     """测试协议打包 -> 解包往返"""
-
     print("\n" + "=" * 60)
     print("测试 3: 协议打包 -> 解包")
     print("=" * 60)
@@ -116,15 +110,13 @@ def test_protocol():
     ])
 
     target = robot.tip_position(q_rand)
-    rotations = inverse_kinematics(target.tolist())
+    rotations, q = inverse_kinematics(target.tolist())
 
-    # 打包
     frame = pack_target(rotations)
     print(f"\n帧长度: {len(frame)} 字节")
     print(f"帧头: {frame[0:2].hex()}")
     print(f"帧尾: {frame[-2:].hex()}")
 
-    # 解包
     result = parse_frame(frame)
     if result is None:
         print("[失败] 帧解析失败")
@@ -134,12 +126,7 @@ def test_protocol():
     print(f"命令字: 0x{cmd:02X}")
     print(f"数据 (圈数): {[f'{v:.6f}' for v in values]}")
 
-    # 验证数据一致性
-    max_diff = max(
-        abs(a - b)
-        for a, b in zip(rotations, values)
-    )
-
+    max_diff = max(abs(a - b) for a, b in zip(rotations, values))
     print(f"\n最大差异 (原始 vs 解析): {max_diff:.2e}")
 
     if max_diff < 1e-5:
@@ -152,7 +139,6 @@ def test_protocol():
 
 def test_crc():
     """测试 CRC 校验"""
-
     print("\n" + "=" * 60)
     print("测试 4: CRC16-Modbus 校验")
     print("=" * 60)
@@ -161,7 +147,6 @@ def test_crc():
     crc = crc16_modbus(data)
     print(f"\n测试帧 CRC: 0x{crc:04X}")
 
-    # 篡改数据后 CRC 应不同
     data_bad = bytearray(data)
     data_bad[3] ^= 0xFF
     crc_bad = crc16_modbus(bytes(data_bad))
@@ -176,14 +161,12 @@ def test_crc():
 
 def test_serialization_sizes():
     """验证舵机圈数量级适合 float32 传输"""
-
     print("\n" + "=" * 60)
     print("测试 5: float32 数值范围")
     print("=" * 60)
 
     robot = MultiSectionRobot()
 
-    # 多次随机测试
     max_val = 0
     for _ in range(100):
         q_rand = np.array([
@@ -194,7 +177,7 @@ def test_serialization_sizes():
         ])
         target = robot.tip_position(q_rand)
         try:
-            rotations = inverse_kinematics(target.tolist())
+            rotations, q = inverse_kinematics(target.tolist())
             local_max = max(abs(r) for r in rotations)
             if local_max > max_val:
                 max_val = local_max
@@ -213,7 +196,6 @@ def test_serialization_sizes():
 
 
 if __name__ == "__main__":
-
     np.random.seed(42)
 
     print("\n" + "=" * 60)

@@ -1,23 +1,17 @@
-# serial_manager.py
+# comm/serial_mgr.py -- 线程安全串口管理
 
 import time
 import serial
 import threading
 
 from config import serial_cfg as cfg
-from logger import setup_logger
+from utils.logger import setup_logger
 
 log = setup_logger("serial_mgr")
 
 
 class SerialManager:
-
-    def __init__(
-            self,
-            port=None,
-            baudrate=None,
-            wait_ready=True):
-
+    def __init__(self, port=None, baudrate=None, wait_ready=True):
         if port is None:
             port = cfg.port_main
         if baudrate is None:
@@ -39,7 +33,6 @@ class SerialManager:
             self._wait_stm32_ready()
 
     def _wait_stm32_ready(self, timeout=5.0):
-        """等待 STM32 就绪：监听反馈帧确认固件已运行"""
         log.info("等待 STM32 就绪...")
         buf = bytearray()
         t0 = time.time()
@@ -58,21 +51,16 @@ class SerialManager:
         log.warning("等待 STM32 超时，继续运行...")
 
     def send(self, data: bytes):
-
         with self.tx_lock:
             self.ser.write(data)
 
     def read_available(self):
-
         n = self.ser.in_waiting
-
         if n > 0:
             return self.ser.read(n)
-
         return b''
 
     def close(self):
-
         try:
             self.ser.close()
         except Exception:
