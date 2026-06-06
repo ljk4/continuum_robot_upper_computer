@@ -44,7 +44,8 @@
 │
 └── docs/
     ├── 通信方案选择.md      -- 通信架构分析
-    └── 下位机代码实现指南.md -- STM32 固件开发指南
+    ├── 下位机代码实现指南.md -- STM32 固件开发指南
+    └── 硬件调试指南.md      -- 接线、坐标、调试步骤
 ```
 
 ## 环境配置
@@ -79,7 +80,13 @@ python main.py
 
 ### MuJoCo 可视化
 
-```bash
+
+
+### 仿真验证（无硬件，推荐）
+
+
+
+通过 MuJoCo 3D 渲染全流程闭环验证：输入源 → IK → EMA → 插值器 → tendon_to_config → FK，与实物控制管线一致。```bash
 python tests/test_mujoco.py
 ```
 
@@ -113,11 +120,6 @@ python tests/test_mujoco.py
                            │  target=[x,y,z]  或  rotations=[r1..r8]
                            │  (每 5 帧 = 10Hz)
                            ▼
-              ┌────────────────────────┐
-              │  位置变化限幅           │  max_position_change=0.02m/步
-              │  limit_position_change │  仅末端模式生效
-              └────────────┬───────────┘
-                           │
                     ┌──────┴──────┐
                     │   模式判断   │
                     └──────┬──────┘
@@ -134,11 +136,13 @@ python tests/test_mujoco.py
           │              │  inverse_kinematics()         │
           │              │                               │
           │              │  damped least squares         │
-          │              │  dq = Jᵀ(JJᵀ+λI)⁻¹·error    │
+          │              │  (JᵀJ + wJ_tᵀJ_t + λI)dq = Jᵀ·error │
+          │              │  w=min_displacement_weight      │
           │              │                               │
           │              │  + 障碍物排斥势场 ──┐         │
           │              │  + 弯曲角梯度惩罚    │ 惩罚函数 │
-          │              │  + 绳长梯度惩罚    ──┘         │
+          │              │  + 绳长梯度惩罚      │         │
+          │              │  + 最小位移正则化  ──┘         │
           │              │                               │
           │              │  clamp_theta 硬夹紧兜底        │
           │              │  ||FK(q)-target|| 收敛检查     │
@@ -225,7 +229,8 @@ python tests/test_mujoco.py
   │  ① FK(q) → pos, error=target-pos    │
   │  ② ||error|| < tol ? → 收敛退出      │
   │  ③ J = jacobian(q)     (3×4 数值)   │
-  │  ④ dq_task = Jᵀ(JJᵀ+λI)⁻¹·error    │
+  │  ④ (JᵀJ+wJ_tᵀJ_t+λI)dq = Jᵀ·error       │
+  │     含绳位移正则化, 偏好位移小的方向    │
   │  ⑤ dq_penalty = compute_penalty():   │
   │     · 障碍物: Jᵀ·force_repulsive     │
   │     · 弯曲角: -∇P_theta              │
@@ -368,14 +373,17 @@ n 段级联：`T_total = T(θ1, φ1)^n @ T(θ2, φ2)^m`
 阻尼最小二乘法（Damped Least Squares）：
 
 ```
-dq = J^T · (J·J^T + λ·I)^(-1) · error
+(JᵀJ + w·J_tendonᵀJ_tendon + λI) dq = Jᵀ · error
+其中 w=min_displacement_weight (默认 0.01), 引导求解器偏好绳位移小的方向
 ```
 
 - J: 3×4 数值雅可比（有限差分，步长 1e-5 rad）
 - λ: 阻尼系数 1e-3
+- w: 绳位移正则化权重 0.01 (在 SafetyConfig.min_displacement_weight)
+- 惩罚函数: 障碍物排斥势场 + 弯曲角梯度 + 绳长梯度
 - 线搜索: 全步长优先，误差增大时回溯减半（最多 5 次）
 - 收敛: ||error|| < 1e-4 m 或 50 次迭代
-- 内置角度安全夹紧（θ ≤ 45°）和障碍物检测
+- clamp_theta 硬夹紧兜底（θ ≤ 45°）
 
 ### 安全机制
 
@@ -386,7 +394,7 @@ dq = J^T · (J·J^T + λ·I)^(-1) · error
 | 软约束 | 障碍物排斥势场 | `robot/kinematics.py` | FK(q) 靠近障碍物时产生排斥力, 融入 DLS 梯度 |
 | 软约束 | 弯曲角惩罚 | `robot/kinematics.py` | θ 超过 80% 限制时施加二次惩罚梯度 |
 | 软约束 | 绳长惩罚 | `robot/kinematics.py` | 圈数超过 5 圈时通过腱雅可比回传惩罚梯度 |
-| 时序 | 位置变化限幅 | `robot/safety.py` | 单步目标位置变化 ≤ 2cm |
+| 软约束 | 绳位移正则化 | `robot/kinematics.py` | DLS 步进中融入 J_tendon 正则项, 引导偏好位移小的解 |
 | 时序 | EMA 低通滤波 | `main.py` | α=0.3, 首次直接初始化 |
 | 时序 | 绳长插值器 | `robot/safety.py` | 每步限幅 0.05 圈, 不拒绝远目标—逐步逼近 |
 | 通信 | ACK 超时急停 | `main.py` | 200ms 无 ACK 自动发送急停帧并锁定位置 |
@@ -401,6 +409,7 @@ dq = J^T · (J·J^T + λ·I)^(-1) · error
 | 绳分布半径 r | 0.028 m | 两部分相同 |
 | 绳盘直径 D | 0.01 m | 舵机轴 |
 | 阻尼系数 λ | 1e-3 | IK 求解器 |
+| 绳位移正则化权重 w | 0.01 | DLS 中引导选位移小的解 |
 | 最大迭代 / 收敛容差 | 50 / 1e-4 m | IK 收敛条件 |
 | 雅可比步长 | 1e-5 rad | 数值差分 |
 

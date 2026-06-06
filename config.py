@@ -150,6 +150,7 @@ class SafetyConfig:
     theta_soft_ratio: float = 0.8           # 弯曲角软边界比例 (80% 处开始惩罚)
     cable_soft_max: float = 5.0             # 绳长软限制 (圈)，超过此值惩罚
     obstacle_margin: float = 1.5            # 障碍物安全裕度系数 (d_safe = radius * margin)
+    min_displacement_weight: float = 0.01   # 绳位移正则化权重 (DLS步进中引导选绳位移小的方向)
 
 
 # =====================================================
@@ -163,7 +164,7 @@ class InputConfig:
     # "vision" | "manual" | "trajectory"
 
     # --- 手动模式子类型 ---
-    manual_submode: str = "curvature"       
+    manual_submode: str = "end_effector"       
     # "end_effector" | "rotations" | "cable_length" | "curvature"
 
     # 末端模式

@@ -259,6 +259,13 @@ class MultiSectionRobot:
             dq_cable = -(1.0 / spool_circ) * J_tendon.T @ grad_rot
             dq_penalty -= safety_cfg.cable_penalty_weight * dq_cable
 
+        # (4) 最小位移引导 — 始终激活，优选绳位移小的解
+        #     P = w/2 · ||tendons||²,  ∇P = w · J_tendonᵀ · tendons
+        if safety_cfg.min_displacement_weight > 0:
+            J_tendon = self.tendon_jacobian(q)
+            dq_penalty -= (safety_cfg.min_displacement_weight
+                           * J_tendon.T @ tendons)
+
         return dq_penalty
 
     def inverse_kinematics(self, target, q0=None, max_iter=None, tol=None):
@@ -285,9 +292,13 @@ class MultiSectionRobot:
                 break
 
             J = self.jacobian(q)
-            JT = J.T
-            # 任务梯度 (DLS) + 惩罚梯度
-            dq_task = JT @ np.linalg.inv(J @ JT + lam * np.eye(3)) @ error
+            # DLS + 绳位移正则化 + 惩罚梯度
+            # 正则项: w·J_tendonᵀJ_tendon 引导求解器偏好绳位移小的方向
+            J_tendon = self.tendon_jacobian(q)
+            w_disp = safety_cfg.min_displacement_weight
+            A = (J.T @ J + w_disp * J_tendon.T @ J_tendon
+                 + lam * np.eye(4))
+            dq_task = np.linalg.solve(A, J.T @ error)
             dq_penalty = self._compute_penalty_gradient(q, J)
             dq = dq_task + dq_penalty
 

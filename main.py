@@ -13,7 +13,6 @@ from vision.tracker import draw_detection
 from robot.kinematics import inverse_kinematics
 from input.sources import create_input_source, VisionInput
 from robot.safety import (
-    limit_position_change,
     RotationInterpolator,
 )
 from config import serial_cfg, control_cfg, safety_cfg, vis_cfg
@@ -95,7 +94,6 @@ def main():
     tx_freq = 0
 
     last_rotations = [0.0] * 8
-    last_target = [0.0, 0.0, 0.0]
     smoothed_rotations = [0.0] * 8
     last_q = None
 
@@ -154,15 +152,9 @@ def main():
                     if target is not None:
                         x, y, z = target
 
-                        target = limit_position_change(
-                            target, last_target,
-                            safety_cfg.max_position_change
-                        )
-
                         raw_result = inverse_kinematics(target, last_q)
                         if raw_result[0] is not None:
                             raw_rotations, last_q = raw_result
-                            last_target = target[:]
                         else:
                             log.debug("IK 被拒绝（不收敛或不可达），保持上次值")
 

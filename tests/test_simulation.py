@@ -19,11 +19,10 @@ import mujoco.viewer
 
 from robot.kinematics import MultiSectionRobot, inverse_kinematics
 from robot.safety import (
-    limit_position_change,
     RotationInterpolator,
 )
 from input.sources import create_input_source, VisionInput
-from config import control_cfg, safety_cfg, vis_cfg, robot_cfg
+from config import control_cfg, vis_cfg, robot_cfg
 from vis.mujoco_model import compute_nodes, draw_scene, XML
 from utils.logger import setup_logger
 
@@ -40,7 +39,6 @@ log.info("输入源: %s", type(input_source).__name__)
 
 # 2. 初始化控制状态（与 main.py 一致）
 last_rotations = [0.0] * 8
-last_target = [0.0, 0.0, robot.tip_position(np.zeros(4))[2]]
 smoothed_rotations = [0.0] * 8
 last_q = None
 x = y = z = 0.0
@@ -101,14 +99,9 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
                 if target is not None:
                     x, y, z = target
 
-                    target = limit_position_change(
-                        target, last_target,
-                        safety_cfg.max_position_change)
-
                     raw_result = inverse_kinematics(target, last_q)
                     if raw_result[0] is not None:
                         raw_rotations, last_q = raw_result
-                        last_target = target[:]
 
             # 共享: EMA + 插值器（插值器自带步长限制，不二值拒绝）
             if raw_rotations is not None:
