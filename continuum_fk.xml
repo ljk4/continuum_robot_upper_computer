@@ -1,0 +1,73 @@
+<mujoco model="continuum_fk">
+
+    <option gravity="0 0 0"/>
+
+    <worldbody>
+
+        <geom
+            type="plane"
+            size="2 2 0.1"/>
+
+        <body name="base">
+
+            <geom
+                type="cylinder"
+                size="0.04 0.02"/>
+
+        </body>
+
+        <!-- 所有mocap都直接挂world -->
+
+        <body mocap="true" name="disk1">
+            <geom type="sphere" size="0.015"/>
+        </body>
+
+        <body mocap="true" name="disk2">
+            <geom type="sphere" size="0.015"/>
+        </body>
+
+        <body mocap="true" name="disk3">
+            <geom type="sphere" size="0.015"/>
+        </body>
+
+        <body mocap="true" name="disk4">
+            <geom type="sphere" size="0.015"/>
+        </body>
+
+        <body mocap="true" name="disk5">
+            <geom type="sphere" size="0.015"/>
+        </body>
+
+        <body mocap="true" name="disk6">
+            <geom type="sphere" size="0.015"/>
+        </body>
+
+        <body mocap="true" name="disk7">
+            <geom type="sphere" size="0.015"
+                  rgba="1 0 0 1"/>
+        </body>
+
+        <body mocap="true" name="disk8">
+            <geom type="sphere" size="0.015"
+                  rgba="1 0 0 1"/>
+        </body>
+
+        <body mocap="true" name="disk9">
+            <geom type="sphere" size="0.015"
+                  rgba="1 0 0 1"/>
+        </body>
+
+        <body mocap="true" name="disk10">
+            <geom type="sphere" size="0.015"
+                  rgba="1 0 0 1"/>
+        </body>
+
+        <body mocap="true" name="tip">
+            <geom type="sphere"
+                  size="0.02"
+                  rgba="0 1 0 1"/>
+        </body>
+
+    </worldbody>
+
+</mujoco>
