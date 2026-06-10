@@ -10,12 +10,12 @@ from comm.sender import SenderThread
 from comm.receiver import ReceiverThread
 from comm.protocol import pack_stop
 from vision.tracker import draw_detection
-from robot.kinematics import inverse_kinematics
+from robot.kinematics import inverse_kinematics, MultiSectionRobot
 from input.sources import create_input_source, VisionInput
 from robot.safety import (
     RotationInterpolator,
 )
-from config import serial_cfg, control_cfg, safety_cfg, vis_cfg
+from config import serial_cfg, control_cfg, safety_cfg, vis_cfg, robot_cfg
 from utils.logger import setup_logger
 
 log = setup_logger("main")
@@ -88,7 +88,11 @@ def main():
         mujoco_thread.start()
         log.info("MuJoCo 可视化线程已启动")
 
-    # 5. 初始化控制状态
+    # 5. 初始化运动学模型 (用于编码器反馈→配置空间转换)
+    robot = MultiSectionRobot()
+    spool_circ = np.pi * robot_cfg.spool_diameter
+
+    # 6. 初始化控制状态
     loop_count = 0
     last_fps_time = time.time()
     tx_freq = 0
@@ -143,9 +147,6 @@ def main():
                         x, y, z = pos_direct
                     if q_direct is not None:
                         last_q = q_direct
-                    log.debug("直接模式: 圈数=%s",
-                              [f"{r:+.4f}" for r in raw_rotations])
-
                 else:
                     # 正常 target → IK 流程
                     target = input_source.get_target()
@@ -173,17 +174,21 @@ def main():
                             )
 
                     interpolator.update_target(smoothed_rotations)
-                    log.debug("舵机圈数: %s",
-                              [f"{r:+.4f}" for r in smoothed_rotations])
 
             # ==== 每 M 次：更新 MuJoCo ====
             mujoco_counter += 1
             if mujoco_counter >= mujoco_div:
                 mujoco_counter = 0
-                if mujoco_thread is not None and last_q is not None:
-                    mujoco_thread.update_state(
-                        last_q, rotations,
-                        target_pos=[x, y, z])
+                if mujoco_thread is not None:
+                    # 仅在有编码器反馈时更新显示 (显示实际机器人姿态)
+                    if receiver.latest_encoder is not None:
+                        enc = list(receiver.latest_encoder)
+                        tendons = -np.array(enc) * spool_circ
+                        q_actual = robot.tendon_to_config(tendons,
+                                                          q0=last_q)
+                        mujoco_thread.update_state(
+                            q_actual, enc,
+                            target_pos=[x, y, z])
 
             # ==== 每秒状态输出 ====
             loop_count += 1
@@ -193,37 +198,42 @@ def main():
                 loop_count = 0
                 last_fps_time = now
 
-                log.info("[状态] 主循环: %dHz  输入: %s",
-                         tx_freq, type(input_source).__name__)
-                log.info("[位姿] X=%.3f  Y=%.3f  Z=%.3f", x, y, z)
-
-                arr = np.array(rotations)
-                log.info("[目标] 范围=[%.4f, %.4f] 圈", arr.min(), arr.max())
+                log.info("-" * 50)
+                log.info("[主循环] %dHz  %s", tx_freq,
+                         type(input_source).__name__)
+                log.info("[目标位姿] X=%+.3f Y=%+.3f Z=%+.3f", x, y, z)
 
                 if interpolator.is_interpolating:
-                    log.info("[插值] 进行中")
+                    max_rem = max(abs(interpolator.target[i]
+                                      - interpolator.current[i])
+                                  for i in range(8))
+                    log.info("[插值] 进行中, 距目标剩余=%.3f 圈", max_rem)
+                else:
+                    log.info("[插值] 已到达")
+
+                arr = np.array(rotations)
+                log.info("[下发圈数] 范围=[%+.3f, %+.3f]", arr.min(), arr.max())
 
                 if receiver.latest_encoder is not None:
                     enc = receiver.latest_encoder
                     errors = np.array([
                         t - e for t, e in zip(rotations, enc)
                     ])
-                    log.info("[误差] 最大=%.6f 圈", np.max(np.abs(errors)))
+                    log.info("[编码器] 偏差 max=%.4f 圈", np.max(np.abs(errors)))
                 else:
-                    log.info("[编码器] 暂无反馈数据")
+                    log.info("[编码器] 暂无")
 
                 ack_age = time.time() - receiver.last_ack_time
-                log.info("[通信] 上次ACK间隔: %.3fs", ack_age)
-
                 if ack_age > control_cfg.ack_timeout_sec:
-                    log.warning("下位机通信超时! (%.3fs)", ack_age)
+                    log.warning("[通信] ACK超时 %.2fs", ack_age)
                     if not ack_stopped:
-                        log.warning("发送急停帧并锁定当前位置")
+                        log.warning("[通信] 发送急停, 锁定当前位置")
                         serial_mgr.send(pack_stop())
                         interpolator.reset(last_rotations)
                         ack_stopped = True
                 else:
                     ack_stopped = False
+                    log.info("[通信] ACK %.0fms", ack_age * 1000)
 
             # ==== 周期耗时检查 ====
             cycle_time = time.perf_counter() - cycle_start

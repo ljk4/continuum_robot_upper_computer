@@ -183,7 +183,7 @@ class MultiSectionRobot:
             J = self.tendon_jacobian(q)
             JT = J.T
             dq = (
-                JT @ np.linalg.inv(J @ JT + lam * np.eye(8)) @ error
+                JT @ np.linalg.solve(J @ JT + lam * np.eye(8), error)
             )
 
             err_norm = np.linalg.norm(error)
@@ -260,13 +260,62 @@ class MultiSectionRobot:
             dq_penalty -= safety_cfg.cable_penalty_weight * dq_cable
 
         # (4) 最小位移引导 — 始终激活，优选绳位移小的解
-        #     P = w/2 · ||tendons||²,  ∇P = w · J_tendonᵀ · tendons
+        #     作为外部梯度偏置叠加，不放入正规方程 RHS，
+        #     避免 A⁻¹ 在 J 零空间方向过度放大
         if safety_cfg.min_displacement_weight > 0:
             J_tendon = self.tendon_jacobian(q)
             dq_penalty -= (safety_cfg.min_displacement_weight
                            * J_tendon.T @ tendons)
 
         return dq_penalty
+
+    def _compute_penalty_cost(self, q):
+        """计算所有软约束惩罚项的标量代价（用于线搜索）
+
+        包含与 _compute_penalty_gradient 一致的三个势场：
+        (1) 障碍物排斥势场 P = Σ w/(2·d_safe) · max(0, d_safe - dist)²
+        (2) 弯曲角惩罚   P = Σ w · max(0, |θ| - soft)²
+        (3) 绳长惩罚     P = Σ w · max(0, |rot| - soft_max)²
+
+        返回:
+            cost — 标量代价值 (float)
+        """
+        cost = 0.0
+
+        # (1) 障碍物排斥势场
+        if safety_cfg.obstacle_awareness:
+            pos = self.tip_position(q)
+            for zone in safety_cfg.obstacle_zones:
+                center = np.array(zone["center"])
+                radius = zone["radius"]
+                d_safe = radius * safety_cfg.obstacle_margin
+                dist = np.linalg.norm(pos - center)
+                if dist < d_safe:
+                    cost += (safety_cfg.obstacle_penalty_weight
+                             / (2.0 * d_safe) * (d_safe - dist)**2)
+
+        # (2) 弯曲角惩罚
+        t1_max = np.deg2rad(cfg.section1_theta_max_deg)
+        t2_max = np.deg2rad(cfg.section2_theta_max_deg)
+        soft1 = t1_max * safety_cfg.theta_soft_ratio
+        soft2 = t2_max * safety_cfg.theta_soft_ratio
+
+        for val, soft in [(q[0], soft1), (q[2], soft2)]:
+            if abs(val) > soft:
+                excess = abs(val) - soft
+                cost += safety_cfg.theta_penalty_weight * excess**2
+
+        # (3) 绳长惩罚
+        tendons = self.config_to_all_tendons(q)
+        spool_circ = np.pi * cfg.spool_diameter
+        rotations = -tendons / spool_circ
+        soft_max = safety_cfg.cable_soft_max
+        for rot in rotations:
+            if abs(rot) > soft_max:
+                excess = abs(rot) - soft_max
+                cost += safety_cfg.cable_penalty_weight * excess**2
+
+        return cost
 
     def inverse_kinematics(self, target, q0=None, max_iter=None, tol=None):
         if max_iter is None:
@@ -292,9 +341,12 @@ class MultiSectionRobot:
                 break
 
             J = self.jacobian(q)
-            # DLS + 绳位移正则化 + 惩罚梯度
-            # 正则项: w·J_tendonᵀJ_tendon 引导求解器偏好绳位移小的方向
+            # 优化框架:
+            #   min ||target-f(q+dq)||² + w_disp·||tendons(q+dq)||² + penalty(q+dq) + λ||dq||²
+            # 位置项 → 正规方程; 最小位移+软约束 → 外部梯度偏置
+            # 注: 最小位移偏置不放入 RHS，避免 A⁻¹ 在 J 零空间方向过度放大
             J_tendon = self.tendon_jacobian(q)
+            tendons = self.config_to_all_tendons(q)
             w_disp = safety_cfg.min_displacement_weight
             A = (J.T @ J + w_disp * J_tendon.T @ J_tendon
                  + lam * np.eye(4))
@@ -302,14 +354,22 @@ class MultiSectionRobot:
             dq_penalty = self._compute_penalty_gradient(q, J)
             dq = dq_task + dq_penalty
 
-            err_norm = np.linalg.norm(error)
+            # 线搜索: 总代价 = 位置误差² + 最小位移 + 软约束惩罚
+            current_cost = (np.sum(error**2)
+                            + w_disp * np.sum(tendons**2)
+                            + self._compute_penalty_cost(q))
             alpha = 1.0
             accepted = False
             for _ in range(5):
                 q_new = q + alpha * dq
                 q_new, _ = clamp_theta(q_new)
                 pos_new = self.tip_position(q_new)
-                if np.linalg.norm(target - pos_new) < err_norm:
+                error_new = target - pos_new
+                tendons_new = self.config_to_all_tendons(q_new)
+                new_cost = (np.sum(error_new**2)
+                            + w_disp * np.sum(tendons_new**2)
+                            + self._compute_penalty_cost(q_new))
+                if new_cost < current_cost:
                     q = q_new
                     accepted = True
                     break

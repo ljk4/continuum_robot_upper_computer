@@ -49,7 +49,7 @@ def hex_dump(data: bytes) -> str:
 
 
 # 从配置读取
-PORT = serial_cfg.port_sim
+PORT = serial_cfg.port_main
 BAUD = serial_cfg.baudrate
 TIMEOUT = 2.0
 

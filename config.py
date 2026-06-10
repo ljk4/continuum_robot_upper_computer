@@ -3,14 +3,13 @@
 import numpy as np
 from dataclasses import dataclass, field
 
-
 # =====================================================
 # 串口配置
 # =====================================================
 
 @dataclass
 class SerialConfig:
-    port_main: str = "COM13"        # 上位机串口端口
+    port_main: str = "COM4"        # 上位机串口端口
     port_sim: str = "COM14"         # 模拟器串口端口（与 port_main 虚拟串口对相连）
     baudrate: int = 115200          # 波特率
     timeout: float = 0.001          # 读超时 (s)
@@ -60,8 +59,8 @@ class RobotConfig:
     jacobian_step: float = 1e-5         # 数值雅可比矩阵的有限差分步长 (rad)
 
     # --- 弯曲角安全限制 ---
-    section1_theta_max_deg: float = 45.0    # 第一部分单节最大弯曲角 (度)
-    section2_theta_max_deg: float = 45.0    # 第二部分单节最大弯曲角 (度)
+    section1_theta_max_deg: float = 30.0    # 第一部分单节最大弯曲角 (度)
+    section2_theta_max_deg: float = 30.0    # 第二部分单节最大弯曲角 (度)
 
     # --- 驱动器参数 ---
     spool_diameter: float = 0.01        # 绳盘直径 (m)，绳缠绕在舵机轴上的圆盘直径
@@ -141,7 +140,7 @@ class SafetyConfig:
     max_position_change: float = 0.02       # 单步最大位置变化量 (m)
 
     # --- 绳长变化阈值 ---
-    max_cable_delta: float = 0.05           # 单步最大绳长变化 (圈)
+    max_cable_delta: float = 0.01           # 单步最大绳长变化 (圈)
 
     # --- IK 惩罚函数权重 ---
     obstacle_penalty_weight: float = 0.01   # 障碍物排斥势场权重
@@ -213,7 +212,7 @@ class ControlConfig:
 
     # --- 线程降频因子 ---
     vision_update_div: int = 5           # 视觉/IK 更新频率 = 主循环 / N (默认 50/5=10Hz)
-    mujoco_update_div: int = 3           # MuJoCo 更新频率 = 主循环 / M (默认 50/3≈17Hz)
+    mujoco_update_div: int = 6           # MuJoCo 更新频率 = 主循环 / M (默认 50/3≈17Hz)
 
 # =====================================================
 # 模块级单例
