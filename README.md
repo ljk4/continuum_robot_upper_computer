@@ -63,12 +63,15 @@ pip install numpy pyserial opencv-python mujoco
 
 ## 快速开始
 
-### 运行测试（无需硬件和串口）
+### 仿真验证（无硬件，推荐）
+
+通过 MuJoCo 3D 渲染全流程闭环验证：输入源 → IK → 插值器 → tendon_to_config → FK，与实物控制管线一致。
 
 ```bash
-cd 大作业
-python tests/test_pipeline.py
+python tests/test_simulation.py
 ```
+
+![仿真界面](docs\mujoco仿真初始位置.png)
 
 ### 仿真模式（无需硬件）
 
@@ -82,13 +85,8 @@ python sim/fake_stm32.py
 python main.py
 ```
 
-### 仿真验证（无硬件，推荐）
+![设置目标](docs\设置目标.png)
 
-通过 MuJoCo 3D 渲染全流程闭环验证：输入源 → IK → 插值器 → tendon_to_config → FK，与实物控制管线一致。
-
-```bash
-python tests/test_mujoco.py
-```
 
 ### 真实硬件
 
@@ -112,7 +110,7 @@ python tests/test_mujoco.py
 
 运行 `python main.py` 后自动弹出（可通过 `config.py` 中 `gui_cfg.enable_gui` 开关）。
 
-![GUI面板](docs/gui_panel.png)
+![GUI面板](docs\gui界面.png)
 
 ### 功能
 
@@ -166,7 +164,7 @@ python tests/test_mujoco.py
 - **修改机器人参数**：编辑 `config.py` 中的 `RobotConfig`
 - **替换通信协议**：修改 `comm/protocol.py`
 
-## 待办事项
+<!-- ## 待办事项
 
 - 零点问题
 - 下位机速度规划（上位机高低频线程规划亦可）
@@ -174,5 +172,5 @@ python tests/test_mujoco.py
 - 下位机舵机型号及能力确认
 - 持续轨迹跟踪 vs 间断式跟踪
 - 工作空间可达性检查
-- S型轨迹与障碍物约束
+- S型轨迹与障碍物约束 -->
 

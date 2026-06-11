@@ -1,5 +1,7 @@
 
 logs
 __pycache__
-docs
+docs\下位机代码实现指南.md
+docs\硬件调试指南.md
+docs\通信方案选择.md
 最终作业.zip
