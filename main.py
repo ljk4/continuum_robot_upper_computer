@@ -15,8 +15,10 @@ from input.sources import create_input_source, VisionInput
 from robot.safety import (
     RotationInterpolator,
 )
-from config import serial_cfg, control_cfg, safety_cfg, vis_cfg, robot_cfg
+from config import serial_cfg, control_cfg, safety_cfg, vis_cfg, robot_cfg, gui_cfg
 from utils.logger import setup_logger
+from gui.shared_state import SharedState
+from gui.gui_app import GUIThread
 
 log = setup_logger("main")
 
@@ -88,6 +90,14 @@ def main():
         mujoco_thread.start()
         log.info("MuJoCo 可视化线程已启动")
 
+    # 4.5 启动 GUI 控制面板
+    shared_state = SharedState()
+    gui_thread = None
+    if gui_cfg.enable_gui:
+        gui_thread = GUIThread(shared_state)
+        gui_thread.start()
+        log.info("GUI 控制面板已启动")
+
     # 5. 初始化运动学模型 (用于编码器反馈→配置空间转换)
     robot = MultiSectionRobot()
     spool_circ = np.pi * robot_cfg.spool_diameter
@@ -98,7 +108,6 @@ def main():
     tx_freq = 0
 
     last_rotations = [0.0] * 8
-    smoothed_rotations = [0.0] * 8
     last_q = None
 
     # 目标位姿，初始化为零
@@ -110,11 +119,7 @@ def main():
     vision_div = control_cfg.vision_update_div
     mujoco_div = control_cfg.mujoco_update_div
 
-    # EMA 低通滤波
-    ema_alpha = 0.3
-    ema_initialized = False
-
-    # 绳长插值器
+    # 绳长插值器（唯一平滑层，替代 EMA）
     interpolator = RotationInterpolator()
     interpolator.reset(last_rotations)
 
@@ -132,6 +137,17 @@ def main():
             last_rotations = rotations[:]
             sender.update_target(rotations)
 
+            # ── ACK 超时急停（每帧检查，不等每秒日志块）──
+            ack_age = time.time() - receiver.last_ack_time
+            if ack_age > control_cfg.ack_timeout_sec:
+                if not ack_stopped:
+                    log.warning("[通信] ACK超时 %.2fs, 发送急停", ack_age)
+                    serial_mgr.send(pack_stop())
+                    interpolator.reset(last_rotations)
+                    ack_stopped = True
+            else:
+                ack_stopped = False
+
             # ==== 每 N 次：读取输入 + IK ====
             vision_counter += 1
             if vision_counter >= vision_div:
@@ -139,41 +155,71 @@ def main():
 
                 raw_rotations = None
 
-                # 先尝试直接模式（跳过 IK 和位置限幅）
-                direct = input_source.get_direct_rotations()
-                if direct is not None:
-                    raw_rotations, q_direct, pos_direct = direct
-                    if pos_direct is not None:
-                        x, y, z = pos_direct
-                    if q_direct is not None:
-                        last_q = q_direct
-                else:
-                    # 正常 target → IK 流程
-                    target = input_source.get_target()
-                    if target is not None:
-                        x, y, z = target
+                # ── GUI 模式：由 GUI 面板完全掌权，忽略 input_source ──
+                if gui_cfg.enable_gui:
+                    gui_result = shared_state.consume_target_update()
+                    zero_mode = shared_state.consume_return_to_zero()
+                    if zero_mode is not None:
+                        raw_rotations = [0.0] * 8
+                        x = y = z = 0.0
+                        last_q = [0.0] * 4
+                        log.info("[GUI] 回零指令 (模式=%s)", zero_mode)
+                    elif gui_result is not None:
+                        mode, values = gui_result
+                        if mode == "end_effector":
+                            x, y, z = values
+                            raw_result = inverse_kinematics(values, last_q)
+                            if raw_result[0] is not None:
+                                raw_rotations, last_q = raw_result
+                            else:
+                                log.debug("[GUI] IK 被拒绝")
+                        elif mode == "rotations":
+                            raw_rotations = values
+                            log.info("[GUI] 圈数目标: %s",
+                                     " ".join(f"{r:+.3f}" for r in values))
+                        elif mode == "cable_length":
+                            raw_rotations = [-v / 1000.0 / spool_circ
+                                           for v in values]
+                            log.info("[GUI] 绳长目标 (mm): %s",
+                                     " ".join(f"{l:.1f}" for l in values))
+                        elif mode == "curvature":
+                            q_gui = np.deg2rad(values)
+                            tendons_gui = robot.config_to_all_tendons(q_gui)
+                            raw_rotations = (-tendons_gui / spool_circ).tolist()
+                            pos_gui = robot.tip_position(q_gui)
+                            x, y, z = pos_gui.tolist()
+                            last_q = q_gui.tolist()
+                            log.info("[GUI] 曲率 (deg): t1=%.1f p1=%.1f t2=%.1f p2=%.1f",
+                                     values[0], values[1], values[2], values[3])
+                    # GUI 无新输入时保持上次 raw_rotations=None，不主动干预
 
-                        raw_result = inverse_kinematics(target, last_q)
-                        if raw_result[0] is not None:
-                            raw_rotations, last_q = raw_result
-                        else:
-                            log.debug("IK 被拒绝（不收敛或不可达），保持上次值")
+                # ── 非 GUI 模式：使用 input_source ──
+                else:
+                    # 先尝试直接模式（跳过 IK 和位置限幅）
+                    direct = input_source.get_direct_rotations()
+                    if direct is not None:
+                        raw_rotations, q_direct, pos_direct = direct
+                        if pos_direct is not None:
+                            x, y, z = pos_direct
+                        if q_direct is not None:
+                            last_q = q_direct
+                    else:
+                        # 正常 target → IK 流程
+                        target = input_source.get_target()
+                        if target is not None:
+                            x, y, z = target
+
+                            raw_result = inverse_kinematics(target, last_q)
+                            if raw_result[0] is not None:
+                                raw_rotations, last_q = raw_result
+                            else:
+                                log.debug("IK 被拒绝（不收敛或不可达），保持上次值")
 
                 # 共享：EMA + 平滑 + 插值器
                 # 插值器自带步长限制 (max_cable_delta/步)，
                 # 不在此处做二值拒绝——否则远目标永远无法到达。
                 if raw_rotations is not None:
-                    if not ema_initialized:
-                        smoothed_rotations = list(raw_rotations)
-                        ema_initialized = True
-                    else:
-                        for i in range(8):
-                            smoothed_rotations[i] = (
-                                ema_alpha * raw_rotations[i]
-                                + (1 - ema_alpha) * smoothed_rotations[i]
-                            )
-
-                    interpolator.update_target(smoothed_rotations)
+                    interpolator.update_target(raw_rotations)
 
             # ==== 每 M 次：更新 MuJoCo ====
             mujoco_counter += 1
@@ -226,14 +272,31 @@ def main():
                 ack_age = time.time() - receiver.last_ack_time
                 if ack_age > control_cfg.ack_timeout_sec:
                     log.warning("[通信] ACK超时 %.2fs", ack_age)
-                    if not ack_stopped:
-                        log.warning("[通信] 发送急停, 锁定当前位置")
-                        serial_mgr.send(pack_stop())
-                        interpolator.reset(last_rotations)
-                        ack_stopped = True
                 else:
-                    ack_stopped = False
                     log.info("[通信] ACK %.0fms", ack_age * 1000)
+
+                # ── 回写状态到 GUI ──
+                if gui_cfg.enable_gui:
+                    ik_err_val = 0.0
+                    if last_q is not None and not all(v == 0 for v in [x, y, z]):
+                        fk_pos = robot.tip_position(np.array(last_q))
+                        ik_err_val = float(np.linalg.norm(
+                            np.array([x, y, z]) - fk_pos))
+                    max_rot_err = 0.0
+                    if receiver.latest_encoder is not None:
+                        max_rot_err = float(np.max(np.abs(
+                            np.array(rotations) - np.array(receiver.latest_encoder))))
+                    shared_state.set_pose([x, y, z])
+                    shared_state.set_status(
+                        fps=tx_freq,
+                        interpolating=interpolator.is_interpolating,
+                        ack_ok=not ack_stopped,
+                        encoder_ok=receiver.latest_encoder is not None,
+                        ik_error=ik_err_val,
+                        max_rot_err=max_rot_err,
+                        source_name=type(input_source).__name__,
+                        active_mode="N/A",
+                    )
 
             # ==== 周期耗时检查 ====
             cycle_time = time.perf_counter() - cycle_start
@@ -261,6 +324,9 @@ def main():
             vis_thread.stop()
         if mujoco_thread is not None:
             mujoco_thread.stop()
+        if gui_thread is not None and gui_cfg.enable_gui:
+            gui_thread.stop()
+            gui_thread.join(timeout=2.0)
         sender.stop()
         receiver.stop()
 

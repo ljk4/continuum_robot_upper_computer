@@ -15,6 +15,10 @@ sim/fake_stm32.py -- STM32 下位机模拟器
     COM13 <-> COM14 通过 com0com 等虚拟串口工具相连
 """
 
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import time
 import struct
 import threading
@@ -112,9 +116,17 @@ class UartReceiver(threading.Thread):
     def run(self):
         global target_rotations, last_target_time
 
+        # 设为非阻塞模式，最大化响应速度
+        self.ser.timeout = 0
+
         while running:
-            data = self.ser.read(self.ser.in_waiting or 1)
+            try:
+                data = self.ser.read(4096)  # 非阻塞，读尽缓冲区
+            except Exception:
+                continue
+
             if not data:
+                time.sleep(0.0005)  # 空闲时 0.5ms 休眠，避免占满 CPU
                 continue
 
             self.buffer.extend(data)

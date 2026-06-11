@@ -82,7 +82,7 @@ python main.py
 
 ### 仿真验证（无硬件，推荐）
 
-通过 MuJoCo 3D 渲染全流程闭环验证：输入源 → IK → EMA → 插值器 → tendon_to_config → FK，与实物控制管线一致。
+通过 MuJoCo 3D 渲染全流程闭环验证：输入源 → IK → 插值器 → tendon_to_config → FK，与实物控制管线一致（EMA 已移除，插值器为唯一平滑层）。
 ```bash
 python tests/test_mujoco.py
 ```
@@ -155,12 +155,6 @@ python tests/test_mujoco.py
           │                             │
           └──────────┬──────────────────┘
                      │  raw_rotations (8 floats)
-                     ▼
-          ┌──────────────────────┐
-          │  EMA 低通滤波         │  α=0.3, 首次直接初始化
-          │  smoothed_rotations  │
-          └──────────┬───────────┘
-                     │
                      ▼
           ┌──────────────────────┐
           │  绳长插值器           │  max_cable_delta=0.05圈/步
@@ -266,8 +260,7 @@ python tests/test_mujoco.py
                    └──────────────────────────┘
                    ┌──────────────────────────┐
   时序平滑         │  位置限幅 (0.02m/步)       │  IK 更新周期 (10Hz)
-  (插值/滤波)      │  EMA 低通 (α=0.3)         │
-                   │  插值器 (0.05圈/步)        │  每帧 (50Hz)
+                   │  插值器 (max_cable_delta圈/步) │  每帧 (50Hz), 唯一平滑层
                    └──────────────────────────┘
                    ┌──────────────────────────┐
   通信保护         │  ACK 超时 → 急停 (200ms)  │  main.py 主循环
@@ -284,7 +277,8 @@ python tests/test_mujoco.py
     ├── ReceiverThread          ←── 串口 RX
     ├── _VisionThread           ←── 摄像头采集
     ├── VisThread (OpenCV)      ──→ 屏幕显示
-    └── MuJoCoVisThread (~60Hz) ──→ 3D 窗口
+    ├── MuJoCoVisThread (~60Hz) ──→ 3D 窗口
+    └── GUIThread (tkinter, ~10Hz) ──→ 控制面板
 
   fake_stm32 (独立进程, 仿真用)
     ├── pid_loop     (1kHz)     ←── 接收线程 → 串口
@@ -310,6 +304,11 @@ python tests/test_mujoco.py
   mujoco_thread.update_state   ←── 不同 ──→  draw_scene(q_achieved)
   (显示 IK 解 q_ik)                           (显示仿真实际姿态)
 ```
+
+> **关键区别**：`main.py` 将圈数**原样下发**给硬件（不检查 PCC 约束）；
+> `test_simulation.py` 使用 `tendon_to_config()` 反算姿态，
+> 当圈数不满足 dl1=-dl3, dl2=-dl4 约束时，反算结果是最近似解（有残差）。
+> 详见 [PCC 绳位移约束](#pcc-绳位移约束-为什么不能单独拉一根绳)。
 
 ## 通信协议
 
@@ -370,6 +369,34 @@ n 段级联：`T_total = T(θ1, φ1)^n @ T(θ2, φ2)^m`
 绳 5-8 总位移 = m × dl(θ2, φ2) + n × dl(θ1, φ1)   (含耦合)
 ```
 
+### PCC 绳位移约束 (为什么不能单独拉一根绳)
+
+4 根绳驱动单节 PCC 时，绳位移之间存在严格的代数约束：
+
+```
+dl1 = -r*theta*cos(phi)        dl3 = +r*theta*cos(phi) = -dl1
+dl2 = +r*theta*sin(phi)        dl4 = -r*theta*sin(phi) = -dl2
+```
+
+即 **dl1 + dl3 = 0** 且 **dl2 + dl4 = 0** -- 4 根绳只有 2 个独立自由度 (theta, phi)。
+
+几何直观：弯曲时内侧绳缩短、外侧绳等量伸长，两侧偏离中性轴的量对称。
+因此**单独拉一根绳（如绳1=1圈而绳3=0）在 PCC 运动学上不可能**。
+
+> **实际下发 vs 仿真显示的差异**：
+>
+> - `main.py` 将圈数原样发送给下位机（不做任何转换），STM32 收到的就是用户设置的
+>   8 个圈数值，即使它们不满足 PCC 约束。真实机器人执行这样的命令时，物理定律会
+>   决定实际姿态（可能与预期不同，甚至导致堵转）。
+>
+> - `test_simulation.py` 使用 `tendon_to_config()` 将圈数反算为配置空间姿态，
+>   以便在 MuJoCo 中渲染。当圈数目标不满足 PCC 约束时，该方法通过阻尼最小二乘
+>   找到**最近似的物理可行配置**，因此仿真显示的姿态会与直觉预期有偏差。
+>
+> - 这是仿真环节的**数学特性**，不是错误。它揭示了 PCC 模型的固有约束。
+>   要获得物理一致的仿真结果，圈数目标应来自 FK/IK 链路（而非手动任意输入）。
+
+
 ### 逆运动学
 
 阻尼最小二乘法（Damped Least Squares）：
@@ -400,7 +427,7 @@ n 段级联：`T_total = T(θ1, φ1)^n @ T(θ2, φ2)^m`
 | 软约束 | 弯曲角惩罚 | `robot/kinematics.py` | θ 超过 80% 限制时施加二次惩罚梯度 |
 | 软约束 | 绳长惩罚 | `robot/kinematics.py` | 圈数超过 5 圈时通过腱雅可比回传惩罚梯度 |
 | 软约束 | 绳位移正则化 | `robot/kinematics.py` | Hessian 含 J_tendonᵀJ_tendon, 梯度偏置在外部 dq_penalty 中, 避免 A⁻¹ 零空间放大 |
-| 时序 | EMA 低通滤波 | `main.py` | α=0.3, 首次直接初始化 |
+| 时序 | 插值器步进限幅 |  | 每步限幅 (见 config.max_cable_delta), 不拒绝远目标—逐步逼近, 替代 EMA |
 | 时序 | 绳长插值器 | `robot/safety.py` | 每步限幅 0.01 圈 (可配), 不拒绝远目标—逐步逼近 |
 | 通信 | ACK 超时急停 | `main.py` | 200ms 无 ACK 自动发送急停帧并锁定位置 |
 | 通信 | CRC16 校验 | `comm/protocol.py` | 帧错误静默丢弃 |
@@ -418,6 +445,7 @@ n 段级联：`T_total = T(θ1, φ1)^n @ T(θ2, φ2)^m`
 | 弯曲角上限 (单节) | 30° (可配) | config.section_theta_max_deg, clamp_theta 硬夹紧 |
 | 惩罚权重 (θ/绳长/障碍物) | 0.01 | 软约束惩罚权重, 可独立调整 |
 | 最大迭代 / 收敛容差 | 50 / 1e-4 m | IK 收敛条件 |
+| GUI 控制面板 | 启用 | gui_cfg.enable_gui = True |
 | 雅可比步长 | 1e-5 rad | 数值差分 |
 
 ## 扩展

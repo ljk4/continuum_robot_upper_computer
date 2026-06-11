@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 
 @dataclass
 class SerialConfig:
-    port_main: str = "COM4"        # 上位机串口端口
+    port_main: str = "COM13"        # 上位机串口端口
     port_sim: str = "COM14"         # 模拟器串口端口（与 port_main 虚拟串口对相连）
     baudrate: int = 115200          # 波特率
     timeout: float = 0.001          # 读超时 (s)
@@ -137,10 +137,10 @@ class SafetyConfig:
     ])
 
     # --- 目标位置变化限制 ---
-    max_position_change: float = 0.02       # 单步最大位置变化量 (m)
+    max_position_change: float = 0.2       # 单步最大位置变化量 (m)
 
     # --- 绳长变化阈值 ---
-    max_cable_delta: float = 0.01           # 单步最大绳长变化 (圈)
+    max_cable_delta: float = 0.1           # 单步最大绳长变化 (圈)
 
     # --- IK 惩罚函数权重 ---
     obstacle_penalty_weight: float = 0.01   # 障碍物排斥势场权重
@@ -163,14 +163,14 @@ class InputConfig:
     # "vision" | "manual" | "trajectory"
 
     # --- 手动模式子类型 ---
-    manual_submode: str = "end_effector"       
+    manual_submode: str = "rotations"       
     # "end_effector" | "rotations" | "cable_length" | "curvature"
 
     # 末端模式
     manual_end_effector: tuple = (0.10, 0.05, 1.10)  # [x, y, z] (m) — 远离 Z 轴可达点
 
     # 圈数模式
-    manual_rotations: tuple = (0.0,) * 8    # 8 个舵机目标圈数
+    manual_rotations: tuple = (0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)     # 8 个舵机目标圈数
 
     # 绳长模式
     manual_cable_length: tuple = (0.0,) * 8 # 8 绳位移 (m)
@@ -214,6 +214,16 @@ class ControlConfig:
     vision_update_div: int = 5           # 视觉/IK 更新频率 = 主循环 / N (默认 50/5=10Hz)
     mujoco_update_div: int = 6           # MuJoCo 更新频率 = 主循环 / M (默认 50/3≈17Hz)
 
+
+# =====================================================
+# GUI 配置
+# =====================================================
+
+@dataclass
+class GuiConfig:
+    enable_gui: bool = True              # 是否启动 GUI 控制面板（独立线程）
+
+
 # =====================================================
 # 模块级单例
 # =====================================================
@@ -226,3 +236,4 @@ safety_cfg = SafetyConfig()
 input_cfg = InputConfig()
 vis_cfg = VisConfig()
 control_cfg = ControlConfig()
+gui_cfg = GuiConfig()
