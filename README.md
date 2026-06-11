@@ -105,6 +105,20 @@ python main.py
 | `RobotConfig` | 段长、半径、IK 参数 | 0.123m / 0.028m |
 | `VisionConfig` | AprilTag 尺寸、相机内参 | 0.05m / 单位变换 |
 | `ControlConfig` | 各线程频率、超时阈值 | 50Hz/100Hz/20Hz |
+| `GuiConfig` | GUI 面板开关 | enable_gui = True |
+| `InputConfig` | 输入模式/子模式/默认值 | manual / end_effector |
+
+### 输入模式
+
+系统支持三种顶层输入模式，通过 `config.py` 的 `input_mode` 设置：
+
+| 模式 | 说明 | GUI 交互 |
+|------|------|----------|
+| **manual** | 手动输入（4 种子模式），详见下方 GUI 章节 | 支持，GUI 可随时覆盖目标 |
+| **vision** | 摄像头 AprilTag 实时检测末端位姿 | 不支持（摄像头自动驱动），可修改代码启用 |
+| **trajectory** | 预设轨迹（正弦/圆/直线），参数可配 | 不支持（轨迹自动生成），可修改代码启用 |
+
+> **注意**：vision 和 trajectory 模式下，GUI 的状态显示面板仍然可用，但 Set Target / Return to Zero 按钮不会生效（目标由摄像头或轨迹生成器决定）。如需在 GUI 中同时支持这两种模式的手动覆盖，可后续扩展。
 
 ## GUI 控制面板
 
