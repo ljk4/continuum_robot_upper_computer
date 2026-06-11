@@ -27,6 +27,10 @@
 ├── input/                 -- 输入源抽象
 │   └── sources.py         -- 视觉/手动/轨迹三种输入模式 + 工厂函数
 │
+├── gui/                   -- tkinter GUI 控制面板
+│   ├── shared_state.py    -- 线程安全状态桥
+│   └── gui_app.py         -- 面板主程序
+│
 ├── vis/                   -- 3D 可视化
 │   ├── mujoco_model.py    -- MuJoCo 场景定义 + PCC 节点计算
 │   └── mujoco_vis.py      -- MuJoCo 可视化线程
@@ -78,11 +82,10 @@ python sim/fake_stm32.py
 python main.py
 ```
 
-### MuJoCo 可视化
-
 ### 仿真验证（无硬件，推荐）
 
-通过 MuJoCo 3D 渲染全流程闭环验证：输入源 → IK → 插值器 → tendon_to_config → FK，与实物控制管线一致（EMA 已移除，插值器为唯一平滑层）。
+通过 MuJoCo 3D 渲染全流程闭环验证：输入源 → IK → 插值器 → tendon_to_config → FK，与实物控制管线一致。
+
 ```bash
 python tests/test_mujoco.py
 ```
@@ -105,210 +108,39 @@ python tests/test_mujoco.py
 | `VisionConfig` | AprilTag 尺寸、相机内参 | 0.05m / 单位变换 |
 | `ControlConfig` | 各线程频率、超时阈值 | 50Hz/100Hz/20Hz |
 
-## 数据流
+## GUI 控制面板
 
-### 主控制管线 (main.py, 50Hz)
+运行 `python main.py` 后自动弹出（可通过 `config.py` 中 `gui_cfg.enable_gui` 开关）。
 
-```
-                    ┌──────────────┐
-                    │  input/      │  视觉 (AprilTag) / 手动 / 轨迹
-                    │  sources.py  │
-                    └──────┬───────┘
-                           │  target=[x,y,z]  或  rotations=[r1..r8]
-                           │  (每 5 帧 = 10Hz)
-                           ▼
-                    ┌──────┴──────┐
-                    │   模式判断   │
-                    └──────┬──────┘
-                           │
-          ┌────────────────┼────────────────┐
-          ▼                                 ▼
-   get_direct_rotations()            get_target() != None
-   返回预计算圈数                    返回末端位置
-   (绳长/圈数/曲率模式)              (末端/视觉/轨迹模式)
-          │                                 │
-          │                                 ▼
-          │              ┌──────────────────────────────┐
-          │              │  IK 求解器                    │
-          │              │  inverse_kinematics()         │
-          │              │                               │
-          │              │  damped least squares         │
-          │              │  (JᵀJ + wJ_tᵀJ_t + λI)dq = Jᵀ·error │
-          │              │  w=min_displacement_weight      │
-          │              │                               │
-          │              │  + 障碍物排斥势场 ──┐         │
-          │              │  + 弯曲角梯度惩罚    │ 惩罚函数 │
-          │              │  + 绳长梯度惩罚      │         │
-          │              │  + 最小位移正则化  ──┘         │
-          │              │                               │
-          │              │  clamp_theta 硬夹紧兜底        │
-          │              │  ||FK(q)-target|| 收敛检查     │
-          │              └──────────────┬───────────────┘
-          │                             │
-          │              ┌──────────────┴───────────────┐
-          │              │  q=[θ1,φ1,θ2,φ2]             │
-          │              │       ↓ config_to_all_tendons │
-          │              │  8 绳位移 dl (m)              │
-          │              │       ↓ ÷(π·D), 带负号        │
-          │              │  rotations=[r1..r8] (圈)      │
-          │              └──────────────┬───────────────┘
-          │                             │
-          └──────────┬──────────────────┘
-                     │  raw_rotations (8 floats)
-                     ▼
-          ┌──────────────────────┐
-          │  绳长插值器           │  max_cable_delta=0.05圈/步
-          │  RotationInterpolator│  每帧步进 → 远目标平滑逼近
-          │  update_target()     │  不二值拒绝，插值器自带限幅
-          │  get_next_step()     │
-          └──────────┬───────────┘
-                     │  rotations (每帧, ~50Hz)
-                     ▼
-          ┌──────────────────────┐
-          │  SenderThread        │  100Hz 独立线程
-          │  pack_target() → 串口 │  39字节定长帧 + CRC16
-          └──────────┬───────────┘
-                     │  UART
-                     ▼
-          ┌──────────────────────┐
-          │  STM32 下位机         │  PID 1kHz
-          │  编码器反馈 @ 20Hz    │  ACK 应答
-          └──────────┬───────────┘
-                     │  反馈帧 (0xA1) / ACK (0x81)
-                     ▼
-          ┌──────────────────────┐
-          │  ReceiverThread      │  独立线程
-          │  解析反馈 + ACK 超时  │  200ms 无 ACK → 急停
-          └──────────────────────┘
-```
+![GUI面板](docs/gui_panel.png)
 
-### 三空间映射
+### 功能
+
+| 功能 | 说明 |
+|------|------|
+| **四种输入模式** | 末端位置 / 舵机圈数 / 绳长 / 常曲率，RadioButton 切换 |
+| **目标设置** | 输入数值后点击 Set Target，主循环立即响应 |
+| **一键回零** | Return to Zero 按钮将所有目标清零，机器人回归直线状态 |
+| **三空间转换** | 实时显示输入目标在 Task / Config / Actuation 三空间的对应值 |
+| **状态监控** | 10Hz 刷新：当前位姿、FPS、插值状态、ACK、编码器、IK 误差 |
+
+### 界面布局
 
 ```
-  驱动空间                  配置空间                   任务空间
-  (8维)                    (4维)                      (3维)
-  
-  rotations[0..7]  ←──→  q=[θ1,φ1,θ2,φ2]  ←──→  pos=[x,y,z]
-  舵机圈数               PCC 弯曲参数             末端位置
-  
-        config_to_all_tendons(q)             FK: tip_position(q)
-  圈数 ──────────────────────> 绳位移            q ──────────────> pos
-        rotations = -dl/(π·D)
-  
-        tendon_to_config(tendons)              IK: inverse_kinematics(pos)
-  绳位移 ─────────────────────> q              pos ─────────────────> q
-        (阻尼最小二乘, 8×4→4)                   (阻尼最小二乘, 3→4)
-
-  腱位移(单节):
-    绳1: dl=-r·θ·cos(φ)    绳2: dl=+r·θ·sin(φ)
-    绳3: dl=+r·θ·cos(φ)    绳4: dl=-r·θ·sin(φ)
-    
-  总位移(含耦合):
-    绳1-4 = n·dl(θ1,φ1)
-    绳5-8 = m·dl(θ2,φ2) + n·dl(θ1,φ1)   ← 穿过第一部分的路径耦合
+┌─────────────────────────────────┐
+│  Mode: ○ EndEffector  ○ Rotations│
+│        ○ CableLength  ○ Curvature│
+├─────────────────────────────────┤
+│  Target Input (动态切换)         │
+│  [Set Target]  [Return to Zero] │
+├─────────────────────────────────┤
+│  Target Conversion (三空间)      │
+├─────────────────────────────────┤
+│  Current Position (实时位姿)     │
+├─────────────────────────────────┤
+│  Status (FPS/ACK/编码器等)       │
+└─────────────────────────────────┘
 ```
-
-### IK 求解器内部流程
-
-```
-  target=[x,y,z], q0(上次解)
-       │
-       ▼
-  ┌─────────────────────────────────────┐
-  │  迭代 (max 50次)                     │
-  │                                      │
-  │  ① FK(q) → pos, error=target-pos    │
-  │  ② ||error|| < tol ? → 收敛退出      │
-  │  ③ J = jacobian(q)     (3×4 数值)   │
-  │  ④ (JᵀJ+wJ_tᵀJ_t+λI)dq = Jᵀ·error       │
-  │     含绳位移正则化, 偏好位移小的方向    │
-  │  ⑤ dq_penalty = compute_penalty():   │
-  │     · 障碍物: Jᵀ·force_repulsive     │
-  │     · 弯曲角: -∇P_theta              │
-  │     · 绳长:   -J_tendonᵀ·∇P_cable   │
-  │     · 最小位移: -w·J_tendonᵀ·tendons │
-  │     (外部偏置叠加, 不经A⁻¹, 避零空间放大)│
-  │  ⑥ dq = dq_task + dq_penalty        │
-  │  ⑦ 线搜索: α=1→0.5→…→0.0625 (最多5次)│
-  │     总代价=位置²+w·Σtendons²+penalty │
-  │     总代价下降则接受, 否则继续        │
-  │  ⑧ clamp_theta(q)  硬夹紧兜底       │
-  │                                      │
-  └──────────────────┬──────────────────┘
-                     │  q
-                     ▼
-  ┌─────────────────────────────────────┐
-  │  验收: ||FK(q) - target||            │
-  │  超过 ik_convergence_tol → 返回 None │
-  │  通过 → 返回 (rotations, q)          │
-  └─────────────────────────────────────┘
-```
-
-### 安全约束分层
-
-```
-                   ┌──────────────────────────┐
-  不可违反         │  θ ≤ θ_max (见 config.py) 硬夹紧 (clamp)   │  IK 迭代最后一步
-  (硬约束)         │  IK 收敛检查 (1mm)         │  不满足 → 返回 None
-                   └──────────────────────────┘
-                   ┌──────────────────────────┐
-  IK 内引导        │  障碍物排斥势场            │  80% 弯曲角处开始惩罚
-  (软约束/惩罚)    │  弯曲角梯度惩罚            │  权重 0.01, 可在 config 调整
-                   │  绳长梯度惩罚 (>5圈)       │
-                  │  最小位移正则化            │  梯度偏置, 不经 A⁻¹ 避免零空间放大
-                  │  线搜索: 总代价下降         │  安全约束不再被位置误差判据静默忽略
-                   └──────────────────────────┘
-                   ┌──────────────────────────┐
-  时序平滑         │  位置限幅 (0.02m/步)       │  IK 更新周期 (10Hz)
-                   │  插值器 (max_cable_delta圈/步) │  每帧 (50Hz), 唯一平滑层
-                   └──────────────────────────┘
-                   ┌──────────────────────────┐
-  通信保护         │  ACK 超时 → 急停 (200ms)  │  main.py 主循环
-                   │  CRC16 校验               │  串口协议层
-                   └──────────────────────────┘
-```
-
-### 线程架构
-
-```
-  main thread (50Hz)
-    │
-    ├── SenderThread (100Hz)    ──→ 串口 TX
-    ├── ReceiverThread          ←── 串口 RX
-    ├── _VisionThread           ←── 摄像头采集
-    ├── VisThread (OpenCV)      ──→ 屏幕显示
-    ├── MuJoCoVisThread (~60Hz) ──→ 3D 窗口
-    └── GUIThread (tkinter, ~10Hz) ──→ 控制面板
-
-  fake_stm32 (独立进程, 仿真用)
-    ├── pid_loop     (1kHz)     ←── 接收线程 → 串口
-    ├── UartReceiver            ←── 串口
-    ├── FeedbackSender (20Hz)   ──→ 串口
-    └── StatusMonitor (1Hz)     ──→ 控制台
-```
-
-### 仿真验证数据流 (test_simulation.py vs main.py)
-
-```
-  main.py:                     test_simulation.py:
-  ─────────                    ────────────────────
-  interpolator.get_next_step()  ←── 相同 ──→  interpolator.get_next_step()
-        │                                            │
-  sender.update_target()        不同              tendon_to_config()
-  串口 → STM32 → 电机                             (驱动→配置逆映射)
-        │                                            │
-        │                                       q_achieved = FK⁻¹(rots)
-        │                                            │
-        │                                       tip = FK(q_achieved)
-        │                                            │
-  mujoco_thread.update_state   ←── 不同 ──→  draw_scene(q_achieved)
-  (显示 IK 解 q_ik)                           (显示仿真实际姿态)
-```
-
-> **关键区别**：`main.py` 将圈数**原样下发**给硬件（不检查 PCC 约束）；
-> `test_simulation.py` 使用 `tendon_to_config()` 反算姿态，
-> 当圈数不满足 dl1=-dl3, dl2=-dl4 约束时，反算结果是最近似解（有残差）。
-> 详见 [PCC 绳位移约束](#pcc-绳位移约束-为什么不能单独拉一根绳)。
 
 ## 通信协议
 
@@ -322,131 +154,10 @@ python tests/test_mujoco.py
 | CRC16 | 2B | Modbus 校验 |
 | 帧尾 | 2B | 0x0D 0x0A |
 
-## 运动学模型
+## 详细文档
 
-### PCC 假设（分段常曲率）
-
-采用 PCC（Piecewise Constant Curvature）模型，每段用两个配置变量描述：
-
-- **theta** (θ) — **单节**弯曲角 (rad)，总弯曲角 = 段数 × θ
-- **phi** (φ) — 弯曲平面角 (rad)
-
-两节机器人共有 4 个配置变量：`q = [theta1, phi1, theta2, phi2]`
-
-### 多段结构
-
-```
-基座 ─── 第一部分(n段) ─── 第二部分(m段) ─── 末端
-  │         │                  │
-  ├── 绳1 ──┤ 锚定             │
-  ├── 绳2 ──┤ 锚定             │
-  ├── 绳3 ──┤ 锚定             │
-  ├── 绳4 ──┤ 锚定             │
-  ├── 绳5 ────────────────────┤ 锚定（穿过第一部分）
-  ├── 绳6 ────────────────────┤ 锚定
-  ├── 绳7 ────────────────────┤ 锚定
-  └── 绳8 ────────────────────┘ 锚定
-```
-
-### 求解链路
-
-```
-目标位置 [x, y, z]
-    → IK 求解 (阻尼最小二乘) → q = [θ1, φ1, θ2, φ2]
-    → 腱映射 (含耦合补偿) → 8 根绳位移 (m)
-    → 圈数转换 → rotations = dl / (π × D)
-    → 下发给下位机
-```
-
-### 正运动学
-
-n 段级联：`T_total = T(θ1, φ1)^n @ T(θ2, φ2)^m`
-
-### 腱位移
-
-```
-绳 1-4 总位移 = n × dl(θ1, φ1)
-绳 5-8 总位移 = m × dl(θ2, φ2) + n × dl(θ1, φ1)   (含耦合)
-```
-
-### PCC 绳位移约束 (为什么不能单独拉一根绳)
-
-4 根绳驱动单节 PCC 时，绳位移之间存在严格的代数约束：
-
-```
-dl1 = -r*theta*cos(phi)        dl3 = +r*theta*cos(phi) = -dl1
-dl2 = +r*theta*sin(phi)        dl4 = -r*theta*sin(phi) = -dl2
-```
-
-即 **dl1 + dl3 = 0** 且 **dl2 + dl4 = 0** -- 4 根绳只有 2 个独立自由度 (theta, phi)。
-
-几何直观：弯曲时内侧绳缩短、外侧绳等量伸长，两侧偏离中性轴的量对称。
-因此**单独拉一根绳（如绳1=1圈而绳3=0）在 PCC 运动学上不可能**。
-
-> **实际下发 vs 仿真显示的差异**：
->
-> - `main.py` 将圈数原样发送给下位机（不做任何转换），STM32 收到的就是用户设置的
->   8 个圈数值，即使它们不满足 PCC 约束。真实机器人执行这样的命令时，物理定律会
->   决定实际姿态（可能与预期不同，甚至导致堵转）。
->
-> - `test_simulation.py` 使用 `tendon_to_config()` 将圈数反算为配置空间姿态，
->   以便在 MuJoCo 中渲染。当圈数目标不满足 PCC 约束时，该方法通过阻尼最小二乘
->   找到**最近似的物理可行配置**，因此仿真显示的姿态会与直觉预期有偏差。
->
-> - 这是仿真环节的**数学特性**，不是错误。它揭示了 PCC 模型的固有约束。
->   要获得物理一致的仿真结果，圈数目标应来自 FK/IK 链路（而非手动任意输入）。
-
-
-### 逆运动学
-
-阻尼最小二乘法（Damped Least Squares）：
-
-```
-(JᵀJ + w·J_tendonᵀJ_tendon + λI) dq = Jᵀ · error
-其中 w=min_displacement_weight (默认 0.01), 引导求解器偏好绳位移小的方向
-```
-
-- J: 3×4 数值雅可比（有限差分，步长 1e-5 rad）
-- λ: 阻尼系数 1e-3
-- w: 绳位移正则化权重 0.01 (在 SafetyConfig.min_displacement_weight)
-- 惩罚函数: 障碍物排斥势场 + 弯曲角梯度 + 绳长梯度 + 最小位移正则化
-  (惩罚梯度作为外部偏置直接叠加到 dq, 不经过正规方程 A⁻¹ 缩放,
-   避免在 J 零空间(3×4→1维零空间)方向被阻尼 λ⁻¹ ≈ 1000× 过度放大)
-- 线搜索: 全步长优先，总代价(位置²+w·Σtendons²+penalty)增大时回溯减半（最多 5 次）
-  设计意图: 仅检查位置误差会导致惩罚项(避障/限位)被静默忽略
-- 收敛: ||error|| < 1e-4 m 或 50 次迭代
-- clamp_theta 硬夹紧兜底（θ ≤ θ_max, 见 config.py）
-
-### 安全机制
-
-| 层级 | 机制 | 位置 | 说明 |
-|------|------|------|------|
-| 硬约束 | 弯曲角夹紧 | `robot/kinematics.py` | IK 迭代最后一步 clamp, θ ≤ θ_max (见 config.py) |
-| 硬约束 | IK 收敛检查 | `robot/kinematics.py` | FK(q) 与目标偏差 > 1mm 则拒绝下发 |
-| 软约束 | 障碍物排斥势场 | `robot/kinematics.py` | FK(q) 靠近障碍物时产生排斥力, 融入 DLS 梯度 |
-| 软约束 | 弯曲角惩罚 | `robot/kinematics.py` | θ 超过 80% 限制时施加二次惩罚梯度 |
-| 软约束 | 绳长惩罚 | `robot/kinematics.py` | 圈数超过 5 圈时通过腱雅可比回传惩罚梯度 |
-| 软约束 | 绳位移正则化 | `robot/kinematics.py` | Hessian 含 J_tendonᵀJ_tendon, 梯度偏置在外部 dq_penalty 中, 避免 A⁻¹ 零空间放大 |
-| 时序 | 插值器步进限幅 |  | 每步限幅 (见 config.max_cable_delta), 不拒绝远目标—逐步逼近, 替代 EMA |
-| 时序 | 绳长插值器 | `robot/safety.py` | 每步限幅 0.01 圈 (可配), 不拒绝远目标—逐步逼近 |
-| 通信 | ACK 超时急停 | `main.py` | 200ms 无 ACK 自动发送急停帧并锁定位置 |
-| 通信 | CRC16 校验 | `comm/protocol.py` | 帧错误静默丢弃 |
-
-### 默认参数
-
-| 参数 | 值 | 说明 |
-|------|-----|------|
-| 第一部分段长 L1 / 段数 n | 0.123 m / 6 | 第一部分 |
-| 第二部分段长 L2 / 段数 m | 0.123 m / 4 | 第二部分 |
-| 绳分布半径 r | 0.028 m | 两部分相同 |
-| 绳盘直径 D | 0.1 m | 舵机轴 |
-| 阻尼系数 λ | 1e-3 | IK 求解器 |
-| 绳位移正则化权重 w | 0.01 | Hessian + 外部梯度偏置, 避免 A⁻¹ 零空间放大 |
-| 弯曲角上限 (单节) | 30° (可配) | config.section_theta_max_deg, clamp_theta 硬夹紧 |
-| 惩罚权重 (θ/绳长/障碍物) | 0.01 | 软约束惩罚权重, 可独立调整 |
-| 最大迭代 / 收敛容差 | 50 / 1e-4 m | IK 收敛条件 |
-| GUI 控制面板 | 启用 | gui_cfg.enable_gui = True |
-| 雅可比步长 | 1e-5 rad | 数值差分 |
+- [系统架构](docs/architecture.md) — 数据流、三空间映射、IK 求解器流程、安全约束分层、线程架构、仿真对比
+- [运动学模型](docs/kinematics.md) — PCC 模型、正/逆运动学、腱位移约束、安全机制、默认参数
 
 ## 扩展
 
@@ -464,3 +175,4 @@ dl2 = +r*theta*sin(phi)        dl4 = -r*theta*sin(phi) = -dl2
 - 持续轨迹跟踪 vs 间断式跟踪
 - 工作空间可达性检查
 - S型轨迹与障碍物约束
+
