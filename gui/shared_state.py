@@ -20,6 +20,10 @@ class SharedState:
         self._target_updated = False
         self._return_to_zero = False
 
+        # 顶层模式切换: manual / vision / trajectory
+        self._top_mode = "manual"
+        self._top_mode_changed = False
+
         # ── 主循环 → GUI (直接设置) ──
         self._current_position = [0.0, 0.0, 0.0]
         self._fps = 0.0
@@ -31,8 +35,35 @@ class SharedState:
         self._input_source_name = ""
         self._active_mode = "end_effector"
 
+        # 视觉/轨迹模式状态
+        self._vision_available = False
+        self._vision_message = ""
+        self._external_target = [0.0, 0.0, 0.0]  # 外部输入源提供的目标位姿
+
     # ═══════════════════════════════════════════
-    # GUI → 主循环
+    # 顶层模式切换
+    # ═══════════════════════════════════════════
+
+    def switch_top_mode(self, mode):
+        """GUI 请求切换到 manual / vision / trajectory。"""
+        with self._lock:
+            self._top_mode = mode
+            self._top_mode_changed = True
+
+    def get_top_mode(self):
+        with self._lock:
+            return self._top_mode
+
+    def consume_top_mode_change(self):
+        """主循环消费模式切换请求。一次性的。"""
+        with self._lock:
+            if self._top_mode_changed:
+                self._top_mode_changed = False
+                return self._top_mode
+            return None
+
+    # ═══════════════════════════════════════════
+    # GUI → 主循环 (目标设置，仅 manual 模式使用)
     # ═══════════════════════════════════════════
 
     def set_end_effector_target(self, x, y, z):
@@ -93,6 +124,25 @@ class SharedState:
     def get_pose(self):
         with self._lock:
             return list(self._current_position)
+
+    def set_external_target(self, pos):
+        """主循环写入外部输入源（视觉/轨迹）提供的目标位姿。"""
+        with self._lock:
+            self._external_target = list(pos)
+
+    def get_external_target(self):
+        with self._lock:
+            return list(self._external_target)
+
+    def set_vision_available(self, available, message=""):
+        """主循环报告视觉模式是否成功启动。"""
+        with self._lock:
+            self._vision_available = available
+            self._vision_message = message
+
+    def get_vision_status(self):
+        with self._lock:
+            return (self._vision_available, self._vision_message)
 
     def set_status(self, fps, interpolating, ack_ok, encoder_ok,
                    ik_error, max_rot_err, source_name, active_mode):

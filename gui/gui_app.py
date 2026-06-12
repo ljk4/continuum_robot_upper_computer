@@ -25,12 +25,16 @@ class GUIThread(threading.Thread):
         self._state = shared_state
         self._root = None
         self._running = True
-        self._mode_var = None       # tk.StringVar
+        self._top_mode_var = None   # tk.StringVar: manual / vision / trajectory
+        self._mode_var = None       # tk.StringVar: end_effector / rotations / ...
+        self._submode_frame = None  # 手动子模式容器（vision/trajectory 时隐藏）
         self._input_frame = None    # 动态输入区域容器
-        self._input_vars = {}       # 当前模式的输入 StringVar 字典
-        self._conv_labels = {}      # 三空间转换显示标签
-        self._pos_labels = {}       # 当前位姿标签
-        self._status_labels = {}    # 状态标签
+        self._input_vars = {}
+        self._conv_labels = {}
+        self._pos_labels = {}
+        self._status_labels = {}
+        self._ext_label = None      # 视觉/轨迹模式状态标签
+        self._fallback_after_id = None  # vision 回退定时器 ID
         self._robot = MultiSectionRobot()
         self._spool_circ = np.pi * robot_cfg.spool_diameter
 
@@ -61,23 +65,100 @@ class GUIThread(threading.Thread):
     # 窗口构建
     # ═══════════════════════════════════════════
 
+
+    def _on_top_mode_change(self):
+        top = self._top_mode_var.get()
+
+        if top == "manual":
+            self._cancel_fallback()
+            self._input_frame.pack(fill="x", padx=8, pady=2)
+            self._submode_frame.pack(
+                fill="x", padx=8, pady=2, before=self._input_frame)
+            self._ext_label.pack_forget()
+            self._rebuild_input_fields()
+            self._state.switch_top_mode("manual")
+
+        elif top == "vision":
+            self._fallback_after_id = None
+            self._submode_frame.pack_forget()
+            self._input_frame.pack_forget()
+            self._ext_label.config(
+                text="Vision: Trying to open camera...", foreground="gray")
+            self._ext_label.pack(fill="x", padx=8, pady=8)
+            self._state.switch_top_mode("vision")
+
+        elif top == "trajectory":
+            self._cancel_fallback()
+            self._submode_frame.pack_forget()
+            self._input_frame.pack_forget()
+            self._ext_label.config(
+                text="Trajectory: active (params in config.py)", foreground="blue")
+            self._ext_label.pack(fill="x", padx=8, pady=8)
+            self._state.switch_top_mode("trajectory")
+
+    def _cancel_fallback(self):
+        if self._fallback_after_id is not None:
+            self._root.after_cancel(self._fallback_after_id)
+            self._fallback_after_id = None
+
+    def _check_vision_fallback(self):
+        available, msg = self._state.get_vision_status()
+        if self._top_mode_var.get() != "vision":
+            return
+        if not available:
+            if self._fallback_after_id is None:
+                self._ext_label.config(
+                    text="Vision unavailable: " + msg
+                    + " - reverting to Manual",
+                    foreground="red")
+                self._fallback_after_id = self._root.after(2000, lambda: (
+                    self._top_mode_var.set("manual"),
+                    self._on_top_mode_change()
+                ))
+        else:
+            if self._fallback_after_id is not None:
+                self._root.after_cancel(self._fallback_after_id)
+                self._fallback_after_id = None
+            self._ext_label.config(
+                text="Vision: connected - " + msg, foreground="green")
+
     def _build_window(self):
-        # ── 模式选择 ──
-        mode_frame = ttk.LabelFrame(self._root, text="Input Mode", padding=8)
-        mode_frame.pack(fill="x", padx=8, pady=(8, 2))
+        # ── 顶层模式选择 ──
+        top_frame = ttk.LabelFrame(self._root, text="Mode", padding=8)
+        top_frame.pack(fill="x", padx=8, pady=(8, 2))
+
+        self._top_mode_var = tk.StringVar(value="manual")
+        for text, val in [
+            ("Manual (手动输入)", "manual"),
+            ("Vision (摄像头 AprilTag)", "vision"),
+            ("Trajectory (预设轨迹)", "trajectory"),
+        ]:
+            ttk.Radiobutton(
+                top_frame, text=text, variable=self._top_mode_var,
+                value=val, command=self._on_top_mode_change
+            ).pack(anchor="w", pady=1)
+
+        # ── 手动子模式（仅 manual 顶层模式时可见）──
+        self._submode_frame = ttk.LabelFrame(self._root, text="Manual Submode", padding=8)
+        self._submode_frame.pack(fill="x", padx=8, pady=2)
 
         self._mode_var = tk.StringVar(value="end_effector")
-        modes = [
+        for text, val in [
             ("End Effector  [X, Y, Z]", "end_effector"),
             ("Rotations     [R1..R8]", "rotations"),
             ("Cable Length  [L1..L8 mm]", "cable_length"),
             ("Curvature     [t1,p1,t2,p2 deg]", "curvature"),
-        ]
-        for text, val in modes:
+        ]:
             ttk.Radiobutton(
-                mode_frame, text=text, variable=self._mode_var,
+                self._submode_frame, text=text, variable=self._mode_var,
                 value=val, command=self._on_mode_change
             ).pack(anchor="w", pady=1)
+
+        # ── 外部模式状态标签（vision/trajectory 时可见）──
+        self._ext_label = ttk.Label(
+            self._root, text="", font=("", 10),
+            foreground="gray", anchor="center")
+        # 初始隐藏，_on_top_mode_change 控制
 
         # ── 动态输入区域 ──
         self._input_frame = ttk.LabelFrame(self._root, text="Target Input", padding=8)
@@ -293,6 +374,8 @@ class GUIThread(threading.Thread):
         self._update_conversion()
 
     def _on_set_target(self):
+        if self._top_mode_var.get() != "manual":
+            return  # 视觉/轨迹模式不允许手动设置目标
         mode = self._mode_var.get()
         try:
             if mode == "end_effector":
@@ -325,6 +408,8 @@ class GUIThread(threading.Thread):
 
     def _on_return_zero(self):
         """一键回零：输入框归零 + 通知主循环。"""
+        if self._top_mode_var.get() != "manual":
+            return  # 视觉/轨迹模式不允许手动回零
         mode = self._mode_var.get()
 
         if mode == "end_effector":
@@ -361,6 +446,7 @@ class GUIThread(threading.Thread):
 
     def _refresh(self):
         """从 SharedState 读取最新数据并更新控件。"""
+        self._check_vision_fallback()
         pos = self._state.get_pose()
         self._pos_labels["x"].config(text=f"{pos[0]:+8.4f}")
         self._pos_labels["y"].config(text=f"{pos[1]:+8.4f}")

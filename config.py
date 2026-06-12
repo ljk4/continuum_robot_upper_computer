@@ -84,7 +84,14 @@ class VisionConfig:
         default_factory=lambda: np.zeros((5, 1), dtype=np.float32)
     )
     aruco_dict: str = "DICT_APRILTAG_36h11"  # AprilTag 字典类型
-    camera_index: int = 0               # 摄像头编号（0 通常是自带摄像头）
+    camera_index: int = 1               # 摄像头编号（0=内置，1=USB外置）
+
+    # --- 相机参数（可选，设 0 表示用默认值）---
+    camera_width: int = 1280            # 分辨率宽度（0=默认）
+    camera_height: int = 720            # 分辨率高度（0=默认）
+    camera_fps: int = 30                # 帧率（0=默认）
+    camera_exposure: float = -6         # 曝光值（0=默认, 负值=更暗减少运动模糊）
+    camera_focus: float = 0             # 对焦值（0=自动对焦）
 
     # ---- 相机坐标系 → 机器人坐标系变换 ----
     #
@@ -180,9 +187,9 @@ class InputConfig:
 
     # --- 轨迹模式参数 ---
     trajectory_type: str = "sine"           # "sine" | "circle" | "line"
-    trajectory_amplitude: float = 0.05      # 轨迹幅度 (m)
-    trajectory_frequency: float = 0.5       # 轨迹频率 (Hz)
-    trajectory_center: tuple = (0.0, 0.0, 0.5)  # 轨迹中心 [x, y, z] (m)
+    trajectory_amplitude: float = 0.1      # 轨迹幅度 (m)
+    trajectory_frequency: float = 0.2       # 轨迹频率 (Hz)，配合硬件速度
+    trajectory_center: tuple = (0.0, 0.0, 1.12)  # 轨迹中心 [x, y, z] (m)
     trajectory_axis: str = "x"              # 轨迹运动轴 ("x" | "y" | "z" | "xy")
 
 

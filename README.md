@@ -114,11 +114,11 @@ python main.py
 
 | 模式 | 说明 | GUI 交互 |
 |------|------|----------|
-| **manual** | 手动输入（4 种子模式），详见下方 GUI 章节 | 支持，GUI 可随时覆盖目标 |
-| **vision** | 摄像头 AprilTag 实时检测末端位姿 | 不支持（摄像头自动驱动），可修改代码启用 |
-| **trajectory** | 预设轨迹（正弦/圆/直线），参数可配 | 不支持（轨迹自动生成），可修改代码启用 |
+| **manual** | 手动输入（4 种子模式），详见下方 GUI 章节 | 完全支持，GUI 可随时设置目标 |
+| **vision** | 摄像头 AprilTag 实时检测末端位姿 | 支持，GUI 选择后自动切换。摄像头不可用时自动退回 manual |
+| **trajectory** | 预设轨迹（正弦/圆/直线），参数见 config.py | 支持，GUI 选择后自动切换，轨迹参数通过 config 配置 |
 
-> **注意**：vision 和 trajectory 模式下，GUI 的状态显示面板仍然可用，但 Set Target / Return to Zero 按钮不会生效（目标由摄像头或轨迹生成器决定）。如需在 GUI 中同时支持这两种模式的手动覆盖，可后续扩展。
+> **注意**：vision 和 trajectory 模式下，Set Target / Return to Zero 按钮禁用（目标由摄像头或轨迹生成器决定）。GUI 仍显示当前位姿和系统状态。切换回 Manual 后恢复手动控制。
 
 ## GUI 控制面板
 

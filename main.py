@@ -11,7 +11,7 @@ from comm.receiver import ReceiverThread
 from comm.protocol import pack_stop
 from vision.tracker import draw_detection
 from robot.kinematics import inverse_kinematics, MultiSectionRobot
-from input.sources import create_input_source, VisionInput
+from input.sources import create_input_source, VisionInput, TrajectoryInput
 from robot.safety import (
     RotationInterpolator,
 )
@@ -155,43 +155,97 @@ def main():
 
                 raw_rotations = None
 
-                # ── GUI 模式：由 GUI 面板完全掌权，忽略 input_source ──
+                # ── GUI 启用时处理顶层模式 ──
                 if gui_cfg.enable_gui:
-                    gui_result = shared_state.consume_target_update()
-                    zero_mode = shared_state.consume_return_to_zero()
-                    if zero_mode is not None:
-                        raw_rotations = [0.0] * 8
-                        x = y = z = 0.0
-                        last_q = [0.0] * 4
-                        log.info("[GUI] 回零指令 (模式=%s)", zero_mode)
-                    elif gui_result is not None:
-                        mode, values = gui_result
-                        if mode == "end_effector":
-                            x, y, z = values
-                            raw_result = inverse_kinematics(values, last_q)
-                            if raw_result[0] is not None:
-                                raw_rotations, last_q = raw_result
-                            else:
-                                log.debug("[GUI] IK 被拒绝")
-                        elif mode == "rotations":
-                            raw_rotations = values
-                            log.info("[GUI] 圈数目标: %s",
-                                     " ".join(f"{r:+.3f}" for r in values))
-                        elif mode == "cable_length":
-                            raw_rotations = [-v / 1000.0 / spool_circ
-                                           for v in values]
-                            log.info("[GUI] 绳长目标 (mm): %s",
-                                     " ".join(f"{l:.1f}" for l in values))
-                        elif mode == "curvature":
-                            q_gui = np.deg2rad(values)
-                            tendons_gui = robot.config_to_all_tendons(q_gui)
-                            raw_rotations = (-tendons_gui / spool_circ).tolist()
-                            pos_gui = robot.tip_position(q_gui)
-                            x, y, z = pos_gui.tolist()
-                            last_q = q_gui.tolist()
-                            log.info("[GUI] 曲率 (deg): t1=%.1f p1=%.1f t2=%.1f p2=%.1f",
-                                     values[0], values[1], values[2], values[3])
-                    # GUI 无新输入时保持上次 raw_rotations=None，不主动干预
+                    # 检查模式切换
+                    req_mode = shared_state.consume_top_mode_change()
+                    if req_mode is not None:
+                        log.info("[GUI] 模式切换 → %s", req_mode)
+                        # 先清理旧模式的资源
+                        if vis_thread is not None:
+                            vis_thread.stop()
+                            vis_thread = None
+                        if req_mode == "vision":
+                            try:
+                                new_src = VisionInput()
+                                new_src.start()
+                                input_source.stop()
+                                input_source = new_src
+                                shared_state.set_vision_available(True, "OK")
+                                log.info("[GUI] Vision 模式已激活")
+                                # 启动 OpenCV 可视化
+                                if vis_cfg.enable_opencv_vis:
+                                    vis_thread = VisThread(new_src)
+                                    vis_thread.start()
+                                    log.info("OpenCV 可视化窗口已启动")
+                            except Exception as e:
+                                shared_state.set_vision_available(
+                                    False, str(e))
+                                log.warning("[GUI] Vision 不可用: %s", e)
+                        elif req_mode == "trajectory":
+                            input_source.stop()
+                            input_source = TrajectoryInput()
+                            log.info("[GUI] Trajectory 模式已激活")
+                        elif req_mode == "manual":
+                            input_source.stop()
+                            input_source = create_input_source()
+                            input_source.start()
+                            log.info("[GUI] Manual 模式已激活")
+
+                    top_mode = shared_state.get_top_mode()
+
+                    if top_mode == "manual":
+                        # ── Manual: GUI 掌权 ──
+                        gui_result = shared_state.consume_target_update()
+                        zero_mode = shared_state.consume_return_to_zero()
+                        if zero_mode is not None:
+                            raw_rotations = [0.0] * 8
+                            x = y = z = 0.0
+                            last_q = [0.0] * 4
+                            log.info("[GUI] 回零指令 (模式=%s)", zero_mode)
+                        elif gui_result is not None:
+                            mode, values = gui_result
+                            if mode == "end_effector":
+                                x, y, z = values
+                                raw_result = inverse_kinematics(values, last_q)
+                                if raw_result[0] is not None:
+                                    raw_rotations, last_q = raw_result
+                                else:
+                                    log.warning("[GUI] IK 被拒绝")
+                            elif mode == "rotations":
+                                raw_rotations = values
+                            elif mode == "cable_length":
+                                raw_rotations = [-v / 1000.0 / spool_circ
+                                               for v in values]
+                            elif mode == "curvature":
+                                q_gui = np.deg2rad(values)
+                                tendons_gui = robot.config_to_all_tendons(q_gui)
+                                raw_rotations = (-tendons_gui / spool_circ).tolist()
+                                pos_gui = robot.tip_position(q_gui)
+                                x, y, z = pos_gui.tolist()
+                                last_q = q_gui.tolist()
+                                log.info("[GUI] 曲率 (deg): %.1f %.1f %.1f %.1f",
+                                         values[0], values[1], values[2], values[3])
+
+                    else:
+                        # ── Vision / Trajectory: input_source 提供目标 ──
+                        direct = input_source.get_direct_rotations()
+                        if direct is not None:
+                            raw_rotations, q_direct, pos_direct = direct
+                            if pos_direct is not None:
+                                x, y, z = pos_direct
+                            if q_direct is not None:
+                                last_q = q_direct
+                        else:
+                            target = input_source.get_target()
+                            if target is not None:
+                                x, y, z = target
+                                shared_state.set_external_target(target)
+                                raw_result = inverse_kinematics(target, last_q)
+                                if raw_result[0] is not None:
+                                    raw_rotations, last_q = raw_result
+                                else:
+                                    log.warning("IK 被拒绝（不收敛或不可达），保持上次值")
 
                 # ── 非 GUI 模式：使用 input_source ──
                 else:
@@ -213,9 +267,9 @@ def main():
                             if raw_result[0] is not None:
                                 raw_rotations, last_q = raw_result
                             else:
-                                log.debug("IK 被拒绝（不收敛或不可达），保持上次值")
+                                log.warning("IK 被拒绝（不收敛或不可达），保持上次值")
 
-                # 共享：EMA + 平滑 + 插值器
+                # 共享：插值器步进（唯一平滑层）
                 # 插值器自带步长限制 (max_cable_delta/步)，
                 # 不在此处做二值拒绝——否则远目标永远无法到达。
                 if raw_rotations is not None:
@@ -226,7 +280,6 @@ def main():
             if mujoco_counter >= mujoco_div:
                 mujoco_counter = 0
                 if mujoco_thread is not None:
-                    # 仅在有编码器反馈时更新显示 (显示实际机器人姿态)
                     if receiver.latest_encoder is not None:
                         enc = list(receiver.latest_encoder)
                         tendons = -np.array(enc) * spool_circ
@@ -277,6 +330,12 @@ def main():
 
                 # ── 回写状态到 GUI ──
                 if gui_cfg.enable_gui:
+                    # 实际末端位姿（从插值器输出反算，与 MuJoCo 显示一致）
+                    tendons_actual = -np.array(rotations) * spool_circ
+                    q_actual = robot.tendon_to_config(tendons_actual, q0=last_q)
+                    fk_actual = robot.tip_position(q_actual)
+                    shared_state.set_pose(fk_actual.tolist())
+
                     ik_err_val = 0.0
                     if last_q is not None and not all(v == 0 for v in [x, y, z]):
                         fk_pos = robot.tip_position(np.array(last_q))
@@ -286,7 +345,6 @@ def main():
                     if receiver.latest_encoder is not None:
                         max_rot_err = float(np.max(np.abs(
                             np.array(rotations) - np.array(receiver.latest_encoder))))
-                    shared_state.set_pose([x, y, z])
                     shared_state.set_status(
                         fps=tx_freq,
                         interpolating=interpolator.is_interpolating,

@@ -21,6 +21,30 @@ class VisionTracker:
 
         self.cap = cv2.VideoCapture(cfg.camera_index)
 
+        # 应用相机参数配置（不支持的直接跳过）
+        def _try_set(prop, value):
+            try:
+                if value != 0:
+                    self.cap.set(prop, value)
+            except Exception:
+                pass
+
+        _try_set(cv2.CAP_PROP_FRAME_WIDTH, cfg.camera_width)
+        _try_set(cv2.CAP_PROP_FRAME_HEIGHT, cfg.camera_height)
+        _try_set(cv2.CAP_PROP_FPS, cfg.camera_fps)
+        # 曝光：先关自动曝光再设手动值
+        try:
+            self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)  # 手动曝光
+            if cfg.camera_exposure != 0:
+                self.cap.set(cv2.CAP_PROP_EXPOSURE, cfg.camera_exposure)
+        except Exception:
+            pass
+
+        print(f"[vision] Camera: "
+              f"{self.cap.get(cv2.CAP_PROP_FRAME_WIDTH):.0f}x"
+              f"{self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT):.0f} @ "
+              f"{self.cap.get(cv2.CAP_PROP_FPS):.0f}fps")
+
         self.obj_points = np.array([
             [-self.tag_size / 2,  self.tag_size / 2, 0],
             [ self.tag_size / 2,  self.tag_size / 2, 0],
