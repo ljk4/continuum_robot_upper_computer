@@ -72,16 +72,18 @@ class RobotConfig:
 
 @dataclass
 class VisionConfig:
-    tag_size: float = 0.05              # AprilTag 物理边长 (m)，即打印出的实际尺寸
-    camera_matrix: np.ndarray = field(  # 相机内参矩阵 3x3，实际工程中需替换为标定结果
+    tag_size: float = 0.1              # AprilTag 物理边长 (m)，即打印出的实际尺寸
+    camera_matrix: np.ndarray = field(  # 相机内参矩阵 3x3，标定结果 (2024-06-12)
         default_factory=lambda: np.array([
-            [800.0,   0.0, 320.0],      # fx, 0, cx
-            [  0.0, 800.0, 240.0],      # 0, fy, cy
-            [  0.0,   0.0,   1.0]       # 0, 0, 1
+            [979.93,    0.0, 691.12],    # fx, 0, cx
+            [  0.0,  977.94, 380.65],    # 0, fy, cy
+            [  0.0,    0.0,   1.0],      # 0, 0, 1
         ], dtype=np.float32)
     )
-    dist_coeffs: np.ndarray = field(    # 畸变系数，默认无畸变
-        default_factory=lambda: np.zeros((5, 1), dtype=np.float32)
+    dist_coeffs: np.ndarray = field(    # 畸变系数 k1,k2,p1,p2,k3
+        default_factory=lambda: np.array([
+            [0.2507], [-0.8146], [0.00265], [0.00233], [0.9756]
+        ], dtype=np.float32)
     )
     aruco_dict: str = "DICT_APRILTAG_36h11"  # AprilTag 字典类型
     camera_index: int = 1               # 摄像头编号（0=内置，1=USB外置）

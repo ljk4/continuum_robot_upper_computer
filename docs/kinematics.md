@@ -107,8 +107,7 @@ dl2 = +r*theta*sin(phi)        dl4 = -r*theta*sin(phi) = -dl2
 | 软约束 | 弯曲角惩罚 | `robot/kinematics.py` | θ 超过 80% 限制时施加二次惩罚梯度 |
 | 软约束 | 绳长惩罚 | `robot/kinematics.py` | 圈数超过 5 圈时通过腱雅可比回传惩罚梯度 |
 | 软约束 | 绳位移正则化 | `robot/kinematics.py` | Hessian 含 J_tendonᵀJ_tendon, 梯度偏置在外部 dq_penalty 中, 避免 A⁻¹ 零空间放大 |
-| 时序 | 插值器步进限幅 |  | 每步限幅 (见 config.max_cable_delta), 不拒绝远目标—逐步逼近, 替代 EMA |
-| 时序 | 绳长插值器 | `robot/safety.py` | 每步限幅 0.01 圈 (可配), 不拒绝远目标—逐步逼近 |
+| 时序 | 绳长插值器 | `robot/safety.py` | 唯一平滑层, 每步限幅 (见 config.max_cable_delta, 默认 0.1圈), 编码器反馈闭环同步 |
 | 通信 | ACK 超时急停 | `main.py` | 200ms 无 ACK 自动发送急停帧并锁定位置 |
 | 通信 | CRC16 校验 | `comm/protocol.py` | 帧错误静默丢弃 |
 

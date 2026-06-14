@@ -94,6 +94,25 @@ python main.py
 2. 修改 `config.py` 中的串口端口和相机参数
 3. 运行 `python main.py`
 
+### 相机标定
+
+已提供摄像头标定工具 `tools/camera_calibration_tool/`：
+
+```bash
+cd tools/camera_calibration_tool
+
+# 1. 采集棋盘格图片
+python capture.py --camera 1 --size 1280x720
+
+# 2. 运行标定（替换 --corner 和 --square 为实际棋盘格参数）
+python calibration.py --image_size 1280x720 --mode calibrate --corner 7x10 --square 15
+
+# 3. 将生成的 camera_params.xml 中的 camera_matrix 和 dist_coeffs
+#    填入 config.py 的 VisionConfig
+```
+
+> **注意**：标定后不要调整焦距，否则需重新标定。相机-机器人外参变换（`cam_to_robot_*`）在纯视觉伺服场景中可保持单位变换。
+
 ## 配置说明
 
 所有参数集中在 `config.py` 中，修改后重启程序生效。

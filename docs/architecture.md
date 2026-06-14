@@ -54,10 +54,10 @@
                      │  raw_rotations (8 floats)
                      ▼
           ┌──────────────────────┐
-          │  绳长插值器           │  max_cable_delta=0.05圈/步
-          │  RotationInterpolator│  每帧步进 → 远目标平滑逼近
-          │  update_target()     │  不二值拒绝，插值器自带限幅
-          │  get_next_step()     │
+          │  绳长插值器           │  max_cable_delta=0.1圈/步
+          │  RotationInterpolator│  每帧步进；sync_current()
+          │  update_target()     │  编码器反馈闭环跟踪
+          │  get_next_step()     │  无编码器时退回开环步进
           └──────────┬───────────┘
                      │  rotations (每帧, ~50Hz)
                      ▼

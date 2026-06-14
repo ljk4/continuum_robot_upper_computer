@@ -133,6 +133,9 @@ def main():
             cycle_start = time.perf_counter()
 
             # ==== 每次迭代：插值 + 发送 ====
+            # 用编码器反馈同步插值器当前值，闭环跟踪
+            if receiver.latest_encoder is not None:
+                interpolator.sync_current(receiver.latest_encoder)
             rotations = interpolator.get_next_step()
             last_rotations = rotations[:]
             sender.update_target(rotations)

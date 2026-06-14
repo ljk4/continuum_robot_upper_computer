@@ -93,6 +93,10 @@ class RotationInterpolator:
     def update_target(self, new_target):
         self.target = list(new_target)
 
+    def sync_current(self, encoder_values):
+        """将 current 同步到编码器反馈的实际位置。"""
+        self.current = list(encoder_values)
+
     def get_next_step(self):
         next_step = [0.0] * 8
         step = self.max_cable_delta
