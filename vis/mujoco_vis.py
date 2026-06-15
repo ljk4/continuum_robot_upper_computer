@@ -37,6 +37,14 @@ class MuJoCoVisThread(threading.Thread):
             self.target_pos = target_pos
 
     def run(self):
+        import os as _os
+        import sys as _sys
+        if _sys.platform != "win32" and \
+           "DISPLAY" not in _os.environ and \
+           "WAYLAND_DISPLAY" not in _os.environ:
+            log.warning("无图形显示服务, MuJoCo 可视化已禁用")
+            return
+
         model = mujoco.MjModel.from_xml_string(XML)
         data = mujoco.MjData(model)
 

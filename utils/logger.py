@@ -21,7 +21,11 @@ def setup_logger(name, log_dir="logs", level=logging.DEBUG):
     # log_dir 相对于项目根目录（utils/ 的父目录）
     project_root = os.path.dirname(script_dir)
     full_log_dir = os.path.join(project_root, log_dir)
-    os.makedirs(full_log_dir, exist_ok=True)
+    try:
+        os.makedirs(full_log_dir, exist_ok=True)
+    except (PermissionError, OSError):
+        full_log_dir = os.path.join("/tmp", "robot_logs", name)
+        os.makedirs(full_log_dir, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = os.path.join(full_log_dir, f"{name}_{timestamp}.log")

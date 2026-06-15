@@ -24,8 +24,11 @@ class SerialManager:
             dsrdtr=False,
             rtscts=False
         )
-        self.ser.setDTR(False)
-        self.ser.setRTS(False)
+        try:
+            self.ser.setDTR(False)
+            self.ser.setRTS(False)
+        except Exception:
+            pass  # 部分 USB 串口适配器不支持硬件流控
 
         self.tx_lock = threading.Lock()
 
