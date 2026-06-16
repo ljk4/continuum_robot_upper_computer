@@ -63,7 +63,7 @@ class RobotConfig:
     section2_theta_max_deg: float = 30.0    # 第二部分单节最大弯曲角 (度)
 
     # --- 驱动器参数 ---
-    spool_diameter: float = 0.01        # 绳盘直径 (m)，绳缠绕在舵机轴上的圆盘直径
+    spool_diameter: float = 0.02        # 绳盘直径 (m)，绳缠绕在舵机轴上的圆盘直径
 
 
 # =====================================================
@@ -86,7 +86,7 @@ class VisionConfig:
         ], dtype=np.float32)
     )
     aruco_dict: str = "DICT_APRILTAG_36h11"  # AprilTag 字典类型
-    camera_index: int = 1               # 摄像头编号（0=内置，1=USB外置）
+    camera_index: int = 0               # 摄像头编号（0=内置，1=USB外置）
 
     # --- 相机参数（可选，设 0 表示用默认值）---
     camera_width: int = 1280            # 分辨率宽度（0=默认）
@@ -146,10 +146,10 @@ class SafetyConfig:
     ])
 
     # --- 目标位置变化限制 ---
-    max_position_change: float = 0.2       # 单步最大位置变化量 (m)
+    max_position_change: float = 0.02       # 单步最大位置变化量 (m)
 
     # --- 绳长变化阈值 ---
-    max_cable_delta: float = 0.1           # 单步最大绳长变化 (圈)
+    max_cable_delta: float = 0.01           # 单步最大绳长变化 (圈)
 
     # --- IK 惩罚函数权重 ---
     obstacle_penalty_weight: float = 0.01   # 障碍物排斥势场权重

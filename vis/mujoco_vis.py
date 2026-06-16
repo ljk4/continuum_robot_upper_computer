@@ -54,7 +54,11 @@ class MuJoCoVisThread(threading.Thread):
         log_interval = 60  # ~1 秒输出一次状态
 
         try:
-            with mujoco.viewer.launch_passive(model, data) as viewer:
+            with mujoco.viewer.launch_passive(
+                    model, data,
+                    show_left_ui=False,
+                    show_right_ui=False,
+            ) as viewer:
                 while viewer.is_running() and self.running:
                     with self.lock:
                         q = self.q.copy()

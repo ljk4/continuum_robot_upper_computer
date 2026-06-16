@@ -45,6 +45,7 @@ class VisThread(threading.Thread):
 
     def stop(self):
         self.running = False
+        cv2.destroyWindow("AprilTag Detection")
 
 
 def main():
@@ -167,6 +168,7 @@ def main():
                         # 先清理旧模式的资源
                         if vis_thread is not None:
                             vis_thread.stop()
+                            vis_thread.join(timeout=0.5)
                             vis_thread = None
                         if req_mode == "vision":
                             try:

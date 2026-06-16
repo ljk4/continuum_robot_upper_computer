@@ -212,19 +212,21 @@ class SearchInput(InputSource):
         self._spool_circ = None
         self._cx = 640.0
         self._cy = 360.0
-        self._Kp = 0.03             # 像素偏差 → theta 增益 (rad/pixel)
-        self._Ka = 0.15             # 面积偏差 → theta2 增益
-        self._target_area = 8000    # 目标 tag 面积 (像素²)
-        self._scan_theta = 0.04     # 扫描弯曲幅度 (rad, ~2.3°)
-        self._scan_speed = 0.3      # 扫描频率 (Hz)
-        self._deadband_px = 40      # 像素死区 (像素)
-        self._deadband_area = 0.15  # 面积死区 (比例)
-        self._hold_frames = 15      # 死区内持续 N 帧后锁定 (约 1.5s)
+        self._Kp = 0.03
+        self._Ka = 0.15
+        self._target_area = 8000
+        self._scan_theta = 0.04
+        self._scan_speed = 0.3
+        self._deadband_px = 40
+        self._deadband_area = 0.15
+        self._hold_frames = 15
         self._t0 = time.time()
         self._lock = threading.Lock()
         self._latest_result = None
         self._hold_counter = 0
-        self._last_rots = None      # 锁定时保持的最后圈数
+        self._last_rots = None
+        self._running = False
+        self._cam_thread = None
 
     def start(self):
         from config import vision_cfg, robot_cfg
@@ -234,11 +236,28 @@ class SearchInput(InputSource):
         self._robot = MultiSectionRobot()
         self._spool_circ = np.pi * robot_cfg.spool_diameter
         self._tracker = VisionTracker()
+        # 后台线程持续采集摄像头帧，供 OpenCV VisThread 使用
+        self._running = True
+        self._cam_thread = threading.Thread(target=self._cam_loop, daemon=True)
+        self._cam_thread.start()
         log.info("Search 模式: 摄像头已打开, 图像中心=(%.0f, %.0f)", self._cx, self._cy)
 
     def stop(self):
+        self._running = False
+        if self._cam_thread:
+            self._cam_thread.join(timeout=1.0)
         if self._tracker:
             self._tracker.release()
+
+    def _cam_loop(self):
+        """后台采集线程：持续读帧，供 VisThread 和 get_direct_rotations 共用"""
+        while self._running:
+            result = self._tracker.get_pose()
+            if result is None:
+                time.sleep(0.001)
+                continue
+            with self._lock:
+                self._latest_result = result
 
     def get_target(self):
         return None  # 始终走 direct_rotations 路径
@@ -246,9 +265,8 @@ class SearchInput(InputSource):
     def get_direct_rotations(self):
         if self._tracker is None:
             return None
-        result = self._tracker.get_pose()
         with self._lock:
-            self._latest_result = result
+            result = self._latest_result
         if result is not None and result.get("pose") is not None:
             return self._servo_to_tag(result)
         # Tag 丢失 → 重置锁定状态 → 扫描
