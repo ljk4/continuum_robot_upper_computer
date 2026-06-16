@@ -11,7 +11,7 @@ from comm.receiver import ReceiverThread
 from comm.protocol import pack_stop
 from vision.tracker import draw_detection
 from robot.kinematics import inverse_kinematics, MultiSectionRobot
-from input.sources import create_input_source, VisionInput, TrajectoryInput
+from input.sources import create_input_source, VisionInput, TrajectoryInput, SearchInput
 from robot.safety import (
     RotationInterpolator,
 )
@@ -185,6 +185,19 @@ def main():
                                 shared_state.set_vision_available(
                                     False, str(e))
                                 log.warning("[GUI] Vision 不可用: %s", e)
+                        elif req_mode == "search":
+                            try:
+                                new_src = SearchInput()
+                                new_src.start()
+                                input_source.stop()
+                                input_source = new_src
+                                log.info("[GUI] Search 模式已激活")
+                                if vis_cfg.enable_opencv_vis:
+                                    vis_thread = VisThread(new_src)
+                                    vis_thread.start()
+                                    log.info("OpenCV 可视化窗口已启动")
+                            except Exception as e:
+                                log.warning("[GUI] Search 不可用: %s", e)
                         elif req_mode == "trajectory":
                             input_source.stop()
                             input_source = TrajectoryInput()

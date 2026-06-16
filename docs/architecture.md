@@ -8,7 +8,7 @@
 
 ```
                     ┌──────────────┐
-                    │  input/      │  视觉 (AprilTag) / 手动 / 轨迹
+                    │  input/      │  手动 / 视觉 / 轨迹 / 搜索(图像伺服)
                     │  sources.py  │
                     └──────┬───────┘
                            │  target=[x,y,z]  或  rotations=[r1..r8]

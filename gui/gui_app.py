@@ -96,6 +96,16 @@ class GUIThread(threading.Thread):
             self._ext_label.pack(fill="x", padx=8, pady=8)
             self._state.switch_top_mode("trajectory")
 
+        elif top == "search":
+            self._cancel_fallback()
+            self._submode_frame.pack_forget()
+            self._input_frame.pack_forget()
+            self._ext_label.config(
+                text="Search: image-based visual servo (tag found=track, lost=scan)",
+                foreground="green")
+            self._ext_label.pack(fill="x", padx=8, pady=8)
+            self._state.switch_top_mode("search")
+
     def _cancel_fallback(self):
         if self._fallback_after_id is not None:
             self._root.after_cancel(self._fallback_after_id)
@@ -132,6 +142,7 @@ class GUIThread(threading.Thread):
             ("Manual (手动输入)", "manual"),
             ("Vision (摄像头 AprilTag)", "vision"),
             ("Trajectory (预设轨迹)", "trajectory"),
+            ("Search (图像伺服搜索)", "search"),
         ]:
             ttk.Radiobutton(
                 top_frame, text=text, variable=self._top_mode_var,

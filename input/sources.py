@@ -198,6 +198,123 @@ class TrajectoryInput(InputSource):
         return (self.center + offset).tolist()
 
 
+class SearchInput(InputSource):
+    """眼在手上纯图像伺服搜索模式
+
+    - Tag 检测到: 像素偏差 → 弯曲角 → 圈数（绕过 IK）
+    - Tag 丢失: 慢速扫描寻找
+    - 不需要标定 cam_to_robot / ee_to_cam
+    """
+
+    def __init__(self):
+        self._tracker = None
+        self._robot = None
+        self._spool_circ = None
+        self._cx = 640.0
+        self._cy = 360.0
+        self._Kp = 0.03             # 像素偏差 → theta 增益 (rad/pixel)
+        self._Ka = 0.15             # 面积偏差 → theta2 增益
+        self._target_area = 8000    # 目标 tag 面积 (像素²)
+        self._scan_theta = 0.04     # 扫描弯曲幅度 (rad, ~2.3°)
+        self._scan_speed = 0.3      # 扫描频率 (Hz)
+        self._deadband_px = 40      # 像素死区 (像素)
+        self._deadband_area = 0.15  # 面积死区 (比例)
+        self._hold_frames = 15      # 死区内持续 N 帧后锁定 (约 1.5s)
+        self._t0 = time.time()
+        self._lock = threading.Lock()
+        self._latest_result = None
+        self._hold_counter = 0
+        self._last_rots = None      # 锁定时保持的最后圈数
+
+    def start(self):
+        from config import vision_cfg, robot_cfg
+        from robot.kinematics import MultiSectionRobot
+        self._cx = float(vision_cfg.camera_matrix[0, 2])
+        self._cy = float(vision_cfg.camera_matrix[1, 2])
+        self._robot = MultiSectionRobot()
+        self._spool_circ = np.pi * robot_cfg.spool_diameter
+        self._tracker = VisionTracker()
+        log.info("Search 模式: 摄像头已打开, 图像中心=(%.0f, %.0f)", self._cx, self._cy)
+
+    def stop(self):
+        if self._tracker:
+            self._tracker.release()
+
+    def get_target(self):
+        return None  # 始终走 direct_rotations 路径
+
+    def get_direct_rotations(self):
+        if self._tracker is None:
+            return None
+        result = self._tracker.get_pose()
+        with self._lock:
+            self._latest_result = result
+        if result is not None and result.get("pose") is not None:
+            return self._servo_to_tag(result)
+        # Tag 丢失 → 重置锁定状态 → 扫描
+        self._hold_counter = 0
+        return self._scan_pattern()
+
+    def get_result(self):
+        """供 VisThread 调用，获取最新检测帧用于 OpenCV 显示"""
+        with self._lock:
+            return self._latest_result
+
+    def _servo_to_tag(self, result):
+        import cv2
+        corners = result.get("corners")
+        cx_px = np.mean(corners[:, 0])
+        cy_px = np.mean(corners[:, 1])
+        area = float(cv2.contourArea(corners.astype(np.float32)))
+
+        ex = cx_px - self._cx
+        ey = cy_px - self._cy
+        area_err = abs(area - self._target_area) / self._target_area
+        pixel_err = np.sqrt(ex**2 + ey**2)
+
+        # 死区 + 滞回: 偏差小则累加计数器，超阈值则重置
+        if pixel_err < self._deadband_px and area_err < self._deadband_area:
+            self._hold_counter += 1
+            if self._hold_counter >= self._hold_frames:
+                # 已锁定: 不输出新目标, 插值器保持当前位置
+                return None
+        else:
+            self._hold_counter = 0
+
+        # 像素偏差 → 弯曲
+        theta1 = self._Kp * pixel_err / self._cx
+        phi1 = np.arctan2(ey, ex)
+
+        # 面积偏差 → 距离调节
+        area_err_signed = (area - self._target_area) / self._target_area
+        theta2 = -self._Ka * area_err_signed
+
+        from config import robot_cfg
+        t1_max = np.deg2rad(robot_cfg.section1_theta_max_deg)
+        t2_max = np.deg2rad(robot_cfg.section2_theta_max_deg)
+        theta1 = np.clip(theta1, 0.0, t1_max)
+        theta2 = np.clip(theta2, -t2_max, t2_max)
+
+        q = np.array([theta1, phi1, theta2, 0.0])
+        tendons = self._robot.config_to_all_tendons(q)
+        rots = (-tendons / self._spool_circ).tolist()
+        self._last_rots = rots
+        pos = self._robot.tip_position(q).tolist()
+        return (rots, q.tolist(), pos)
+
+    def _scan_pattern(self):
+        t = time.time() - self._t0
+        phi1 = 2.0 * np.pi * self._scan_speed * t
+        from config import robot_cfg
+        t1_max = np.deg2rad(robot_cfg.section1_theta_max_deg)
+        theta1 = np.clip(self._scan_theta, 0.0, t1_max)
+        q = np.array([theta1, phi1, 0.0, 0.0])
+        tendons = self._robot.config_to_all_tendons(q)
+        rots = (-tendons / self._spool_circ).tolist()
+        pos = self._robot.tip_position(q).tolist()
+        return (rots, q.tolist(), pos)
+
+
 def create_input_source(cfg=None):
     """根据配置创建输入源"""
     if cfg is None:
