@@ -53,6 +53,8 @@ def main():
     log.info("绳驱动并联机器人上位机控制系统")
     log.info("=" * 60)
 
+    running = True
+
     # 1. 创建输入源
     input_source = create_input_source()
     input_source.start()
@@ -108,7 +110,7 @@ def main():
     last_fps_time = time.time()
     tx_freq = 0
 
-    last_rotations = [0.0] * 8
+    last_rotations = [0.0] * robot_cfg.num_cables
     last_q = None
 
     # 目标位姿，初始化为零
@@ -126,11 +128,17 @@ def main():
 
     # ACK 超时急停状态
     ack_stopped = False
+    serial_lost_time = 0.0  # 通信中断时间戳，0=未中断
 
     log.info("等待控制循环... (按 ESC 退出展示窗口)")
 
     try:
-        while True:
+        while running:
+            # GUI 关闭窗口时停止
+            if gui_cfg.enable_gui and shared_state.stop_requested():
+                log.info("GUI 窗口已关闭")
+                break
+
             cycle_start = time.perf_counter()
 
             # ==== 每次迭代：插值 + 发送 ====
@@ -146,11 +154,35 @@ def main():
             if ack_age > control_cfg.ack_timeout_sec:
                 if not ack_stopped:
                     log.warning("[通信] ACK超时 %.2fs, 发送急停", ack_age)
-                    serial_mgr.send(pack_stop())
+                    try:
+                        serial_mgr.send(pack_stop())
+                    except Exception:
+                        log.warning("[通信] 急停帧发送失败（下位机已离线）")
                     interpolator.reset(last_rotations)
                     ack_stopped = True
+                    serial_lost_time = time.time()
+                    sender.set_emergency()
+                    # 立即更新 GUI 状态
+                    if gui_cfg.enable_gui:
+                        shared_state.set_status(
+                            fps=0, interpolating=False,
+                            ack_ok=False, encoder_ok=False,
+                            ik_error=0.0, max_rot_err=0.0,
+                            source_name="SYSTEM",
+                            active_mode="EMERGENCY_STOP",
+                        )
+                    log.warning("下位机通信丢失，将在 %.1f 秒后自动停止...",
+                                control_cfg.ack_exit_delay)
             else:
                 ack_stopped = False
+                serial_lost_time = 0.0
+
+            # 通信中断超时 → 自动退出
+            if serial_lost_time > 0 and \
+               (time.time() - serial_lost_time) > control_cfg.ack_exit_delay:
+                log.warning("下位机通信丢失超过 %.1f 秒，系统自动停止",
+                            control_cfg.ack_exit_delay)
+                break
 
             # ==== 每 N 次：读取输入 + IK ====
             vision_counter += 1
@@ -217,10 +249,13 @@ def main():
                         gui_result = shared_state.consume_target_update()
                         zero_mode = shared_state.consume_return_to_zero()
                         if zero_mode is not None:
-                            raw_rotations = [0.0] * 8
-                            x = y = z = 0.0
+                            raw_rotations = [0.0] * robot_cfg.num_cables
+                            # 零圈数对应竖直向上位姿，用 FK 计算正确显示坐标
+                            fk_home = robot.tip_position([0.0, 0.0, 0.0, 0.0])
+                            x, y, z = fk_home.tolist()
                             last_q = [0.0] * 4
-                            log.info("[GUI] 回零指令 (模式=%s)", zero_mode)
+                            log.info("[GUI] 回零指令 (模式=%s) 末端=(%.3f,%.3f,%.3f)",
+                                     zero_mode, x, y, z)
                         elif gui_result is not None:
                             mode, values = gui_result
                             if mode == "end_effector":
@@ -321,9 +356,10 @@ def main():
                 log.info("[目标位姿] X=%+.3f Y=%+.3f Z=%+.3f", x, y, z)
 
                 if interpolator.is_interpolating:
+                    n = robot_cfg.num_cables
                     max_rem = max(abs(interpolator.target[i]
                                       - interpolator.current[i])
-                                  for i in range(8))
+                                  for i in range(n))
                     log.info("[插值] 进行中, 距目标剩余=%.3f 圈", max_rem)
                 else:
                     log.info("[插值] 已到达")

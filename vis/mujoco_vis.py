@@ -8,6 +8,7 @@ import mujoco
 import mujoco.viewer
 
 from vis.mujoco_model import compute_nodes, draw_scene, XML
+from config import robot_cfg
 from utils.logger import setup_logger
 
 log = setup_logger("mujoco_vis")
@@ -23,7 +24,7 @@ class MuJoCoVisThread(threading.Thread):
     def __init__(self):
         super().__init__(daemon=True)
         self.q = np.zeros(4)
-        self.rotations = np.zeros(8)
+        self.rotations = np.zeros(robot_cfg.num_cables)
         self.target_pos = None
         self.lock = threading.Lock()
         self.running = True

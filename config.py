@@ -13,6 +13,7 @@ class SerialConfig:
     port_sim: str = "COM14"         # 模拟器串口端口（与 port_main 虚拟串口对相连）
     baudrate: int = 115200          # 波特率
     timeout: float = 0.001          # 读超时 (s)
+    write_timeout: float = 1.0      # 写超时 (s)，STM32 断开后串口写入会超时，不阻塞太久
 
 
 # =====================================================
@@ -42,20 +43,22 @@ class RobotConfig:
     section1_length: float = 0.123       # 第一部分单节段长 L1 (m)
     section1_radius: float = 0.028       # 第一部分绳分布半径 r1 (m)
     section1_segments: int = 6          # 第一部分子节数 n（n 个相同 PCC 段串联）
+    section1_cables: int = 4            # 第一部分绳数
 
     # --- 第二部分几何参数 ---
     section2_length: float = 0.123       # 第二部分单节段长 L2 (m)
     section2_radius: float = 0.028      # 第二部分绳分布半径 r2 (m)
     section2_segments: int = 4          # 第二部分子节数 m（m 个相同 PCC 段串联）
+    section2_cables: int = 2            # 第二部分绳数（可改为 4 恢复 4+4 配置）
 
-    num_cables: int = 8                 # 绳/腱总数（每节 4 根，两节共 8 根）
+    num_cables: int = field(init=False)  # 绳/腱总数（自动计算）
 
     # --- 逆运动学求解器参数 ---
     ik_initial_guess_deg: tuple = (10.0, 0.0, 10.0, 0.0)  # IK 初始猜测 [theta1, phi1, theta2, phi2] (度)，每节弯曲角
     ik_damping: float = 1e-3            # 阻尼最小二乘法的阻尼系数 lambda
-    ik_max_iter: int = 50               # IK 最大迭代次数
+    ik_max_iter: int = 80               # IK 最大迭代次数
     ik_tolerance: float = 1e-4          # IK 收敛容差 (m)，0.1mm 精度
-    ik_convergence_tol: float = 1e-3   # IK 结果验收容差 (m)，超过此值拒绝下发
+    ik_convergence_tol: float = 2e-3   # IK 结果验收容差 (m)，超过此值拒绝下发
     jacobian_step: float = 1e-5         # 数值雅可比矩阵的有限差分步长 (rad)
 
     # --- 弯曲角安全限制 ---
@@ -63,7 +66,10 @@ class RobotConfig:
     section2_theta_max_deg: float = 30.0    # 第二部分单节最大弯曲角 (度)
 
     # --- 驱动器参数 ---
-    spool_diameter: float = 0.02        # 绳盘直径 (m)，绳缠绕在舵机轴上的圆盘直径
+    spool_diameter: float = 0.025        # 绳盘直径 (m)，绳缠绕在舵机轴上的圆盘直径
+
+    def __post_init__(self):
+        self.num_cables = self.section1_cables + self.section2_cables
 
 
 # =====================================================
@@ -112,12 +118,32 @@ class VisionConfig:
     #   绳3 (180°) → X 正方向
     #   绳4 (270°) → Y 负方向
     #
+    #   第二段绳分布（2 绳拮抗对）：
+    #   绳5 (0°)   → 与绳1 同方位，X 负方向
+    #   绳6 (180°) → 与绳3 同方位，X 正方向
+    #
     #   原点：机器人基座中心（绳分布圆中心）
     #   X 轴：绳1 → 绳3 方向（正方向指向绳3）
     #   Y 轴：绳4 → 绳2 方向（正方向指向绳2）
     #   Z 轴：竖直向上（右手定则）
     #
     # 变换公式：pose_robot = cam_to_robot_R @ pose_cam + cam_to_robot_t
+    #
+    # 相机定义（OpenCV 惯例）：
+    #   相机 +Z 轴 = 镜头朝向（拍摄方向）
+    #   相机 +X 轴 = 图像右方向
+    #   相机 +Y 轴 = 图像下方向
+    #
+    # 【示例】摄像头放在机器人 X 正方向 0.5m 处，朝向机器人原点：
+    #   位置：cam_to_robot_t = [0.5, 0.0, 0.0]
+    #   旋转矩阵推导：
+    #     相机 +Z（镜头朝向）指向机器人 -X → R·(0,0,1)ᵀ = (-1,0,0)ᵀ
+    #     相机 +X（图像右）  指向机器人 -Y → R·(1,0,0)ᵀ = (0,-1,0)ᵀ
+    #     相机 +Y（图像下）  指向机器人 +Z → R·(0,1,0)ᵀ = (0,0,1)ᵀ
+    #   得：
+    #     cam_to_robot_R = [[0, 0,-1],
+    #                       [-1,0, 0],
+    #                       [0, 1, 0]]
     #
     # 当前为单位变换（待标定后替换）：
     #   cam_to_robot_R = I（无旋转）
@@ -144,9 +170,6 @@ class SafetyConfig:
         # 占位符，后续替换为真实障碍物地图
         {"center": [0.0, 0.0, 0.5], "radius": 0.05}
     ])
-
-    # --- 目标位置变化限制 ---
-    max_position_change: float = 0.02       # 单步最大位置变化量 (m)
 
     # --- 绳长变化阈值 ---
     max_cable_delta: float = 0.01           # 单步最大绳长变化 (圈)
@@ -179,10 +202,10 @@ class InputConfig:
     manual_end_effector: tuple = (0.10, 0.05, 1.10)  # [x, y, z] (m) — 远离 Z 轴可达点
 
     # 圈数模式
-    manual_rotations: tuple = (0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)     # 8 个舵机目标圈数
+    manual_rotations: tuple = (0.5, 0.0, 0.0, 0.0, 0.0, 0.0)   # N 个舵机目标圈数
 
     # 绳长模式
-    manual_cable_length: tuple = (0.0,) * 8 # 8 绳位移 (m)
+    manual_cable_length: tuple = (0.0,) * 6 # N 绳位移 (m)
 
     # 常曲率模式
     manual_curvature: tuple = (20.0, 0.0, 20.0, 180.0)  # [θ1, φ1, θ2, φ2] (度)
@@ -217,7 +240,8 @@ class ControlConfig:
     feedback_hz: float = 20.0           # 编码器反馈发送频率 (Hz)，仅模拟器使用
     pid_gain: float = 0.01              # PID 比例增益 Kp，仅模拟器使用
     slow_loop_warn_sec: float = 0.025   # 主循环耗时超过此值时发出警告 (s)
-    ack_timeout_sec: float = 0.2        # ACK 超时阈值，超过此时间未收到 ACK 则报警 (s)
+    ack_timeout_sec: float = 0.8        # ACK 超时阈值，超过此时间未收到 ACK 则报警 (s)
+    ack_exit_delay: float = 3.0         # ACK 超时持续此时间后自动退出 (s)
 
     # --- 线程降频因子 ---
     vision_update_div: int = 5           # 视觉/IK 更新频率 = 主循环 / N (默认 50/5=10Hz)

@@ -23,51 +23,6 @@ def clamp_theta(q):
     return q_c, was_clamped
 
 
-def check_obstacle(target_pos):
-    """检查目标位置是否在障碍物区域内"""
-    if not safety_cfg.obstacle_awareness:
-        return True, ""
-
-    target = np.array(target_pos)
-    for i, zone in enumerate(safety_cfg.obstacle_zones):
-        center = np.array(zone["center"])
-        radius = zone["radius"]
-        dist = np.linalg.norm(target - center)
-        if dist < radius:
-            return False, (
-                f"目标 {target_pos} 在障碍区 {i} 内 "
-                f"(中心={zone['center']}, 半径={radius}m)"
-            )
-    return True, ""
-
-
-def limit_position_change(new_target, last_target, max_change=None):
-    """限制目标位置变化幅度"""
-    if max_change is None:
-        max_change = safety_cfg.max_position_change
-
-    delta = np.array(new_target) - np.array(last_target)
-    dist = np.linalg.norm(delta)
-    if dist > max_change:
-        delta = delta * (max_change / dist)
-
-    return (np.array(last_target) + delta).tolist()
-
-
-def check_cable_delta(new_rotations, current_rotations, max_delta=None):
-    """检查绳长变化是否超限
-
-    返回:
-        (safe, max_delta_seen): safe=True 表示全部在限内
-    """
-    if max_delta is None:
-        max_delta = safety_cfg.max_cable_delta
-
-    deltas = [abs(n - c) for n, c in zip(new_rotations, current_rotations)]
-    max_d = max(deltas)
-    return max_d <= max_delta, max_d
-
-
 class RotationInterpolator:
     """绳长目标插值器
 
@@ -80,8 +35,9 @@ class RotationInterpolator:
             max_cable_delta if max_cable_delta is not None
             else safety_cfg.max_cable_delta
         )
-        self.current = [0.0] * 8
-        self.target = [0.0] * 8
+        n = robot_cfg.num_cables
+        self.current = [0.0] * n
+        self.target = [0.0] * n
 
     @property
     def is_interpolating(self):
@@ -98,10 +54,11 @@ class RotationInterpolator:
         self.current = list(encoder_values)
 
     def get_next_step(self):
-        next_step = [0.0] * 8
+        n = len(self.current)
+        next_step = [0.0] * n
         step = self.max_cable_delta
 
-        for i in range(8):
+        for i in range(n):
             delta = self.target[i] - self.current[i]
             if abs(delta) <= step:
                 next_step[i] = self.target[i]

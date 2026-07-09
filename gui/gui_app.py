@@ -37,6 +37,7 @@ class GUIThread(threading.Thread):
         self._fallback_after_id = None  # vision 回退定时器 ID
         self._robot = MultiSectionRobot()
         self._spool_circ = np.pi * robot_cfg.spool_diameter
+        self._num_cables = robot_cfg.num_cables
 
     def stop(self):
         self._running = False
@@ -59,6 +60,7 @@ class GUIThread(threading.Thread):
 
     def _on_close(self):
         self._running = False
+        self._state.request_stop()
         self._root.quit()
 
     # ═══════════════════════════════════════════
@@ -192,7 +194,7 @@ class GUIThread(threading.Thread):
         sections = [
             ("Task",     ["X (m)", "Y (m)", "Z (m)"]),
             ("Config",   ["t1(deg)", "p1(deg)", "t2(deg)", "p2(deg)"]),
-            ("Actuation",["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8"]),
+            ("Actuation", [f"R{i+1}" for i in range(self._num_cables)]),
         ]
         for sec_name, fields in sections:
             row = ttk.Frame(conv_frame)
@@ -260,21 +262,22 @@ class GUIThread(threading.Thread):
             self._build_xyz_fields()
         elif mode == "rotations":
             self._build_8value_fields("Rotation", "rev", [
-                "#1", "#2", "#3", "#4", "#5", "#6", "#7", "#8",
+                f"#{i+1}" for i in range(self._num_cables)
             ])
         elif mode == "cable_length":
             self._build_8value_fields("Length", "mm", [
-                "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8",
+                f"L{i+1}" for i in range(self._num_cables)
             ])
         elif mode == "curvature":
             self._build_curvature_fields()
 
     def _build_xyz_fields(self):
-        """末端位置模式：X, Y, Z 三个输入框。"""
+        """末端位置模式：X, Y, Z 三个输入框，默认值为竖直向上位姿。"""
+        zero_pos = self._robot.tip_position([0.0, 0.0, 0.0, 0.0])
         for i, axis in enumerate(["X (m)", "Y (m)", "Z (m)"]):
             ttk.Label(self._input_frame, text=axis + ":", width=6).grid(
                 row=0, column=i * 2, sticky="e", padx=(4, 2), pady=4)
-            var = tk.StringVar(value="0.000")
+            var = tk.StringVar(value=f"{zero_pos[i]:.3f}")
             self._input_vars[axis[0].lower()] = var
             ttk.Entry(self._input_frame, textvariable=var, width=9).grid(
                 row=0, column=i * 2 + 1, padx=(0, 6), pady=4)
@@ -319,7 +322,7 @@ class GUIThread(threading.Thread):
         mode = self._mode_var.get()
         pos = [0.0, 0.0, 0.0]
         q_deg = [0.0, 0.0, 0.0, 0.0]
-        rots = [0.0] * 8
+        rots = [0.0] * self._num_cables
 
         try:
             if mode == "end_effector":
@@ -333,14 +336,14 @@ class GUIThread(threading.Thread):
                     q_deg = [np.rad2deg(v) for v in q]
 
             elif mode == "rotations":
-                rots = [float(self._input_vars[f"#{i+1}"].get()) for i in range(8)]
+                rots = [float(self._input_vars[f"#{i+1}"].get()) for i in range(self._num_cables)]
                 tendons = -np.array(rots, dtype=float) * self._spool_circ
                 q = self._robot.tendon_to_config(tendons)
                 pos = self._robot.tip_position(q).tolist()
                 q_deg = [np.rad2deg(v) for v in q]
 
             elif mode == "cable_length":
-                lengths = [float(self._input_vars[f"L{i+1}"].get()) for i in range(8)]
+                lengths = [float(self._input_vars[f"L{i+1}"].get()) for i in range(self._num_cables)]
                 rots = [-l / 1000.0 / self._spool_circ for l in lengths]
                 tendons = -np.array(rots, dtype=float) * self._spool_circ
                 q = self._robot.tendon_to_config(tendons)
@@ -368,7 +371,7 @@ class GUIThread(threading.Thread):
             text="  ".join(f"{f}={q_deg[i]:+6.1f}" for i, f in
                            enumerate(["t1", "p1", "t2", "p2"])))
         self._conv_labels["Actuation"].config(
-            text="  ".join(f"R{i+1}={rots[i]:+.3f}" for i in range(8)))
+            text="  ".join(f"R{i+1}={rots[i]:+.3f}" for i in range(self._num_cables)))
 
     # ═══════════════════════════════════════════
     # 回调
@@ -397,12 +400,12 @@ class GUIThread(threading.Thread):
 
             elif mode == "rotations":
                 rots = [float(self._input_vars[f"#{i+1}"].get())
-                        for i in range(8)]
+                        for i in range(self._num_cables)]
                 self._state.set_rotation_target(rots)
 
             elif mode == "cable_length":
                 lengths = [float(self._input_vars[f"L{i+1}"].get())
-                           for i in range(8)]
+                           for i in range(self._num_cables)]
                 self._state.set_cable_length_target(lengths)
 
             elif mode == "curvature":
@@ -424,19 +427,21 @@ class GUIThread(threading.Thread):
         mode = self._mode_var.get()
 
         if mode == "end_effector":
-            for k in ["x", "y", "z"]:
-                self._input_vars[k].set("0.000")
-            self._state.set_end_effector_target(0.0, 0.0, 0.0)
+            # 零圈数对应竖直向上位姿
+            zero_pos = self._robot.tip_position([0.0, 0.0, 0.0, 0.0])
+            for k, v in zip(["x", "y", "z"], zero_pos):
+                self._input_vars[k].set(f"{v:.3f}")
+            self._state.set_end_effector_target(*zero_pos.tolist())
 
         elif mode == "rotations":
-            for i in range(8):
+            for i in range(self._num_cables):
                 self._input_vars[f"#{i+1}"].set("0.000")
-            self._state.set_rotation_target([0.0] * 8)
+            self._state.set_rotation_target([0.0] * self._num_cables)
 
         elif mode == "cable_length":
-            for i in range(8):
+            for i in range(self._num_cables):
                 self._input_vars[f"L{i+1}"].set("0.000")
-            self._state.set_cable_length_target([0.0] * 8)
+            self._state.set_cable_length_target([0.0] * self._num_cables)
 
         elif mode == "curvature":
             for k in ["t1", "p1", "t2", "p2"]:

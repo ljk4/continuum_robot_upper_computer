@@ -4,6 +4,9 @@ import cv2
 import numpy as np
 
 from config import vision_cfg as cfg
+from utils.logger import setup_logger
+
+log = setup_logger("vision")
 
 
 class VisionTracker:
@@ -40,10 +43,10 @@ class VisionTracker:
         except Exception:
             pass
 
-        print(f"[vision] Camera: "
-              f"{self.cap.get(cv2.CAP_PROP_FRAME_WIDTH):.0f}x"
-              f"{self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT):.0f} @ "
-              f"{self.cap.get(cv2.CAP_PROP_FPS):.0f}fps")
+        log.info(f"Camera: "
+                 f"{self.cap.get(cv2.CAP_PROP_FRAME_WIDTH):.0f}x"
+                 f"{self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT):.0f} @ "
+                 f"{self.cap.get(cv2.CAP_PROP_FPS):.0f}fps")
 
         self.obj_points = np.array([
             [-self.tag_size / 2,  self.tag_size / 2, 0],

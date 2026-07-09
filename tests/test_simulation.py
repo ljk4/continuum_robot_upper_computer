@@ -38,8 +38,8 @@ input_source.start()
 log.info("输入源: %s", type(input_source).__name__)
 
 # 2. 初始化控制状态（与 main.py 一致）
-last_rotations = [0.0] * 8
-smoothed_rotations = [0.0] * 8
+last_rotations = [0.0] * robot_cfg.num_cables
+smoothed_rotations = [0.0] * robot_cfg.num_cables
 last_q = None
 x = y = z = 0.0
 
@@ -119,7 +119,7 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
                     smoothed_rotations = list(raw_rotations)
                     ema_initialized = True
                 else:
-                    for i in range(8):
+                    for i in range(robot_cfg.num_cables):
                         smoothed_rotations[i] = (
                             ema_alpha * raw_rotations[i]
                             + (1 - ema_alpha) * smoothed_rotations[i])
@@ -182,28 +182,37 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
             # 驱动空间 (Actuation Space) — 舵机圈数
             # ================================================================
             log.info("── 驱动空间 (Actuation Space / 圈数) ──")
-            log.info("  %-12s  %8s  %8s  %8s  %8s", "第一部分绳", "#1", "#2", "#3", "#4")
-            log.info("  %-12s  %+8.3f  %+8.3f  %+8.3f  %+8.3f",
-                     "IK目标", ik_rots[0], ik_rots[1], ik_rots[2], ik_rots[3])
-            log.info("  %-12s  %+8.3f  %+8.3f  %+8.3f  %+8.3f",
-                     "插值步进", rotations[0], rotations[1], rotations[2], rotations[3])
-            log.info("  %-12s  %8s  %8s  %8s  %8s", "第二部分绳", "#5", "#6", "#7", "#8")
-            log.info("  %-12s  %+8.3f  %+8.3f  %+8.3f  %+8.3f",
-                     "IK目标", ik_rots[4], ik_rots[5], ik_rots[6], ik_rots[7])
-            log.info("  %-12s  %+8.3f  %+8.3f  %+8.3f  %+8.3f",
-                     "插值步进", rotations[4], rotations[5], rotations[6], rotations[7])
+            n1 = robot_cfg.section1_cables
+            n2 = robot_cfg.section2_cables
+            sec1_headers = "  ".join(f"#{i+1}" for i in range(n1))
+            sec2_headers = "  ".join(f"#{n1+i+1}" for i in range(n2))
+            log.info("  %-12s  %s", "第一部分绳", sec1_headers)
+            log.info("  %-12s  %s",
+                     "IK目标",
+                     "  ".join(f"{ik_rots[i]:+8.3f}" for i in range(n1)))
+            log.info("  %-12s  %s",
+                     "插值步进",
+                     "  ".join(f"{rotations[i]:+8.3f}" for i in range(n1)))
+            log.info("  %-12s  %s", "第二部分绳", sec2_headers)
+            log.info("  %-12s  %s",
+                     "IK目标",
+                     "  ".join(f"{ik_rots[n1+i]:+8.3f}" for i in range(n2)))
+            log.info("  %-12s  %s",
+                     "插值步进",
+                     "  ".join(f"{rotations[n1+i]:+8.3f}" for i in range(n2)))
 
             # ================================================================
             # 插值进度
             # ================================================================
             if interpolator.is_interpolating:
                 # 分部分显示剩余
+                n1 = robot_cfg.section1_cables
                 rem_sec1 = max(
                     abs(interpolator.target[i] - interpolator.current[i])
-                    for i in range(4))
+                    for i in range(n1))
                 rem_sec2 = max(
                     abs(interpolator.target[i] - interpolator.current[i])
-                    for i in range(4, 8))
+                    for i in range(n1, robot_cfg.num_cables))
                 log.info("── 插值进度: 进行中, 第一部分最大剩余=%.4f 圈, "
                          "第二部分最大剩余=%.4f 圈", rem_sec1, rem_sec2)
             else:

@@ -31,14 +31,15 @@ def crc16_modbus(data: bytes):
 
 
 def pack_target(lengths):
-    """打包目标值帧：8 个 float32（舵机圈数）"""
-    if len(lengths) != 8:
-        raise ValueError("lengths must contain 8 floats")
+    """打包目标值帧：N 个 float32（舵机圈数），不足 8 个时补零"""
+    values = list(lengths)
+    while len(values) < 8:
+        values.append(0.0)
 
     frame = bytearray()
     frame += FRAME_HEADER
     frame.append(CMD_TARGET)
-    frame += struct.pack("<8f", *lengths)
+    frame += struct.pack("<8f", *values[:8])
     crc = crc16_modbus(frame)
     frame += struct.pack("<H", crc)
     frame += FRAME_TAIL

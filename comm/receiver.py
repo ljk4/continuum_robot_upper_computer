@@ -10,6 +10,7 @@ from comm.protocol import (
     CMD_FEEDBACK,
     CMD_ACK,
 )
+from config import robot_cfg
 from utils.logger import setup_logger
 
 log = setup_logger("receiver")
@@ -69,7 +70,7 @@ class ReceiverThread(threading.Thread):
                 cmd, values = result
 
                 if cmd == CMD_FEEDBACK:
-                    self.latest_encoder = values
+                    self.latest_encoder = values[:robot_cfg.num_cables]
                     log.debug("收到反馈帧")
 
                 elif cmd == CMD_ACK:

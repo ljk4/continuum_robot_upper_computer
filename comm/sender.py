@@ -3,8 +3,8 @@
 import time
 import threading
 
-from comm.protocol import pack_target
-from config import control_cfg as cfg
+from comm.protocol import pack_target, pack_stop
+from config import control_cfg as cfg, robot_cfg
 
 
 class SenderThread(threading.Thread):
@@ -12,12 +12,17 @@ class SenderThread(threading.Thread):
         super().__init__(daemon=True)
         self.serial_mgr = serial_mgr
         self.running = True
-        self.target = [0.0] * 8
+        self.target = [0.0] * robot_cfg.num_cables
         self.lock = threading.Lock()
+        self._emergency = False
 
     def update_target(self, lengths):
         with self.lock:
             self.target = lengths.copy()
+
+    def set_emergency(self):
+        """进入急停模式：停止发送正常帧，只发急停帧。"""
+        self._emergency = True
 
     def stop(self):
         self.running = False
@@ -25,16 +30,20 @@ class SenderThread(threading.Thread):
     def run(self):
         freq = cfg.send_hz
         period = 1.0 / freq
+        stop_frame = pack_stop()
 
         while self.running:
             try:
                 t0 = time.perf_counter()
 
-                with self.lock:
-                    target = self.target.copy()
-
-                frame = pack_target(target)
-                self.serial_mgr.send(frame)
+                if self._emergency:
+                    # 急停模式下只发急停帧
+                    self.serial_mgr.send(stop_frame)
+                else:
+                    with self.lock:
+                        target = self.target.copy()
+                    frame = pack_target(target)
+                    self.serial_mgr.send(frame)
 
                 dt = time.perf_counter() - t0
                 remain = period - dt

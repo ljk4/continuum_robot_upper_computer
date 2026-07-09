@@ -5,3 +5,11 @@ docs\下位机代码实现指南.md
 docs\硬件调试指南.md
 docs\通信方案选择.md
 最终作业.zip
+.agents
+.claude
+# LaTeX 编译产物
+/docs/*.aux
+/docs/*.log
+/docs/*.out
+/docs/*.toc
+/docs/*.xdv

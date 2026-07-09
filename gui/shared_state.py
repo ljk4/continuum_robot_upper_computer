@@ -14,6 +14,9 @@ class SharedState:
     def __init__(self):
         self._lock = threading.Lock()
 
+        # ── 程序停止标志 ──
+        self._stop_requested = False
+
         # ── GUI → 主循环 (写入 + 消费) ──
         self._target_mode = "end_effector"
         self._target_values = [0.0, 0.0, 0.0]
@@ -39,6 +42,18 @@ class SharedState:
         self._vision_available = False
         self._vision_message = ""
         self._external_target = [0.0, 0.0, 0.0]  # 外部输入源提供的目标位姿
+
+    # ═══════════════════════════════════════════
+    # 程序停止
+    # ═══════════════════════════════════════════
+
+    def request_stop(self):
+        with self._lock:
+            self._stop_requested = True
+
+    def stop_requested(self):
+        with self._lock:
+            return self._stop_requested
 
     # ═══════════════════════════════════════════
     # 顶层模式切换

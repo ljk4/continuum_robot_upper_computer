@@ -8,8 +8,5 @@ from robot.kinematics import (
 )
 from robot.safety import (
     clamp_theta,
-    check_obstacle,
-    limit_position_change,
-    check_cable_delta,
     RotationInterpolator,
 )

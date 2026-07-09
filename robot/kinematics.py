@@ -71,16 +71,25 @@ def rotz(a):
 class PCCSection:
     """单节 PCC 模型"""
 
-    def __init__(self, L, r):
+    def __init__(self, L, r, num_cables=4):
         self.L = L
         self.r = r
+        self.num_cables = num_cables
 
     def config_to_tendon(self, theta, phi):
-        dl1 = -self.r * theta * np.cos(phi)
-        dl2 =  self.r * theta * np.sin(phi)
-        dl3 =  self.r * theta * np.cos(phi)
-        dl4 = -self.r * theta * np.sin(phi)
-        return np.array([dl1, dl2, dl3, dl4])
+        if self.num_cables == 4:
+            dl1 = -self.r * theta * np.cos(phi)
+            dl2 =  self.r * theta * np.sin(phi)
+            dl3 =  self.r * theta * np.cos(phi)
+            dl4 = -self.r * theta * np.sin(phi)
+            return np.array([dl1, dl2, dl3, dl4])
+        elif self.num_cables == 2:
+            # 2 绳拮抗对：布置在 0° 和 180° 方位角（对称分布，与绳1、绳3同方位）
+            dl1 = -self.r * theta * np.cos(phi)    # 0° 绳
+            dl2 =  self.r * theta * np.cos(phi)    # 180° 绳（与 0° 绳反向拮抗）
+            return np.array([dl1, dl2])
+        else:
+            raise ValueError(f"Unsupported cable count: {self.num_cables}")
 
     def transform(self, theta, phi):
         T = np.eye(4)
@@ -102,16 +111,18 @@ class PCCSection:
 class MultiSectionRobot:
     """多段连续体机器人运动学模型
 
-    第一部分：n 个相同 PCC 段串联，4 根绳锚定在第一部分末端
-    第二部分：m 个相同 PCC 段串联，4 根绳穿过第一部分锚定在第二部分末端
-    总计 8 根绳，配置空间 4 维 [theta1, phi1, theta2, phi2]
+    第一部分：n 个相同 PCC 段串联，section1_cables 根绳锚定在第一部分末端
+    第二部分：m 个相同 PCC 段串联，section2_cables 根绳穿过第一部分锚定在第二部分末端
+    总计 section1_cables + section2_cables 根绳，配置空间 4 维 [theta1, phi1, theta2, phi2]
     """
 
     def __init__(self):
         self.n = cfg.section1_segments
         self.m = cfg.section2_segments
-        self.sec1 = PCCSection(L=cfg.section1_length, r=cfg.section1_radius)
-        self.sec2 = PCCSection(L=cfg.section2_length, r=cfg.section2_radius)
+        self.sec1 = PCCSection(L=cfg.section1_length, r=cfg.section1_radius,
+                               num_cables=cfg.section1_cables)
+        self.sec2 = PCCSection(L=cfg.section2_length, r=cfg.section2_radius,
+                               num_cables=cfg.section2_cables)
 
     def forward(self, theta1, phi1, theta2, phi2):
         T = np.eye(4)
@@ -140,11 +151,12 @@ class MultiSectionRobot:
         return J
 
     def tendon_jacobian(self, q, h=None):
-        """8×4 腱映射雅可比矩阵：d(tendon_i)/d(q_j)"""
+        """(num_cables)×4 腱映射雅可比矩阵：d(tendon_i)/d(q_j)"""
         if h is None:
             h = cfg.jacobian_step
         f0 = self.config_to_all_tendons(q)
-        J = np.zeros((8, 4))
+        n = len(f0)
+        J = np.zeros((n, 4))
         for i in range(4):
             q2 = q.copy()
             q2[i] += h
@@ -156,7 +168,7 @@ class MultiSectionRobot:
                          max_iter=None, tol=None):
         """驱动空间 → 配置空间逆映射
 
-        给定 8 个腱位移，用阻尼最小二乘求解最接近的 q。
+        给定 N 个腱位移，用阻尼最小二乘求解最接近的 q。
         用于仿真验证：将插值后的圈数转回 q，通过 FK 得到实际末端位置。
 
         返回:
@@ -181,9 +193,10 @@ class MultiSectionRobot:
                 break
 
             J = self.tendon_jacobian(q)
+            n = J.shape[0]
             JT = J.T
             dq = (
-                JT @ np.linalg.solve(J @ JT + lam * np.eye(8), error)
+                JT @ np.linalg.solve(J @ JT + lam * np.eye(n), error)
             )
 
             err_norm = np.linalg.norm(error)
@@ -247,9 +260,10 @@ class MultiSectionRobot:
         spool_circ = np.pi * cfg.spool_diameter
         rotations = -tendons / spool_circ
         soft_max = safety_cfg.cable_soft_max
-        grad_rot = np.zeros(8)
+        n = len(tendons)
+        grad_rot = np.zeros(n)
         active = False
-        for i in range(8):
+        for i in range(n):
             if abs(rotations[i]) > soft_max:
                 excess = abs(rotations[i]) - soft_max
                 grad_rot[i] = 2.0 * excess * np.sign(rotations[i])
@@ -385,10 +399,15 @@ class MultiSectionRobot:
         dl2 = self.sec2.config_to_tendon(q[2], q[3])
 
         # 第二部分绳穿过第一部分的耦合项：
-        # 绳5-8 与绳1-4 通道对应、方位角相同，穿过同一弯曲路径
+        # 每根第二节绳取同一方位角的第一节绳通道耦合
+        # 如第二段有 2 根绳（0°、180°），则取第一段 0°(idx0) 和 180°(idx2) 的耦合
         coupling = dl1 * self.n
+        step = self.sec1.num_cables // self.sec2.num_cables  # 均匀取样的步长
 
-        return np.concatenate([dl1 * self.n, dl2 * self.m + coupling])
+        return np.concatenate([
+            dl1 * self.n,
+            dl2 * self.m + coupling[::step]
+        ])
 
     def task_to_tendon(self, target, q0=None):
         q = self.inverse_kinematics(target, q0)
@@ -441,5 +460,5 @@ if __name__ == "__main__":
     print(error)
 
     tendons = robot.config_to_all_tendons(q_est)
-    print("\n8根绳位移(mm):")
+    print(f"\n{len(tendons)}根绳位移(mm):")
     print(np.round(tendons * 1000, 3))

@@ -31,7 +31,7 @@ data = mujoco.MjData(model)
 # 每个目标缓存各自的 IK 解（冗余机器人有多解，复用保证一致性）
 q_cache = {}   # key: tuple(target) → q
 q = np.zeros(4)
-rots = np.zeros(8)
+rots = np.zeros(robot_cfg.num_cables)
 ik_success = False
 
 with mujoco.viewer.launch_passive(model, data) as viewer:

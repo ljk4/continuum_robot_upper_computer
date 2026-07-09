@@ -63,7 +63,7 @@ def draw_scene(viewer, q, target_pos=None, rotations=None):
         viewer:  mujoco.viewer 实例
         q:      [theta1, phi1, theta2, phi2] (rad)
         target_pos: [x, y, z] 目标位置 (m)，或 None
-        rotations:  [r1..r8] 8 舵机圈数，或 None
+        rotations:  舵机圈数列表，长度 = 总绳数，或 None
 
     返回:
         nodes, tip_pos

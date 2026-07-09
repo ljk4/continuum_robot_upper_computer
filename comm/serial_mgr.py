@@ -21,6 +21,7 @@ class SerialManager:
             port=port,
             baudrate=baudrate,
             timeout=cfg.timeout,
+            write_timeout=cfg.write_timeout,
             dsrdtr=False,
             rtscts=False
         )

@@ -36,14 +36,14 @@ from comm.protocol import (
     crc16_modbus,
     parse_frame,
 )
-from config import serial_cfg, control_cfg
+from config import serial_cfg, control_cfg, robot_cfg
 from utils.logger import setup_logger
 
 log = setup_logger("fake_stm32")
 
 # 全局共享状态
-target_rotations = [0.0] * 8
-encoder_rotations = [0.0] * 8
+target_rotations = [0.0] * robot_cfg.num_cables
+encoder_rotations = [0.0] * robot_cfg.num_cables
 running = True
 state_lock = threading.Lock()
 last_target_time = 0.0
@@ -64,10 +64,15 @@ def build_feedback():
     with state_lock:
         encoder = encoder_rotations.copy()
 
+    # 保持 8-float 协议兼容，不足补零
+    values = list(encoder)
+    while len(values) < 8:
+        values.append(0.0)
+
     frame = bytearray()
     frame += FRAME_HEADER
     frame.append(CMD_FEEDBACK)
-    frame += struct.pack("<8f", *encoder)
+    frame += struct.pack("<8f", *values[:8])
     crc = crc16_modbus(frame)
     frame += struct.pack("<H", crc)
     frame += FRAME_TAIL
@@ -88,7 +93,7 @@ def pid_loop():
 
         with state_lock:
             target = target_rotations.copy()
-            for i in range(8):
+            for i in range(robot_cfg.num_cables):
                 error = target[i] - encoder_rotations[i]
                 if abs(error) < deadband:
                     continue
